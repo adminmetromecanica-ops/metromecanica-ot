@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: metromecanica-ot
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+      apt-get install -y nodejs
+      npm install
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    disk:
+      name: metromecanica-data
+      mountPath: /opt/render/project/src/ordenes_generadas
+      sizeGB: 1

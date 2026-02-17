@@ -1,0 +1,15 @@
+{
+  "name": "metromecanica-ot-generator",
+  "version": "1.0.0",
+  "description": "Sistema generador de órdenes de trabajo para Metromecanica",
+  "main": "generate_ot.js",
+  "scripts": {
+    "start": "node generate_ot.js"
+  },
+  "dependencies": {
+    "docx": "^8.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
