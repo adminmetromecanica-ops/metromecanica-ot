@@ -1,4 +1,3 @@
-
 """
 app.py — Servidor web para generación de Órdenes de Trabajo
 Metromecanica Ingenieria y Metrologia S.A.C.
