@@ -1,3 +1,4 @@
+
 """
 app.py — Servidor web para generación de Órdenes de Trabajo
 Metromecanica Ingenieria y Metrologia S.A.C.
@@ -14,6 +15,14 @@ import json
 import subprocess
 import tempfile
 from flask import Flask, request, jsonify, send_file, send_from_directory
+
+# Sistema de auditoría para INACAL
+try:
+    import audit_logger
+    AUDIT_ENABLED = True
+except ImportError:
+    AUDIT_ENABLED = False
+    print("⚠️  Sistema de auditoría no disponible")
 
 # ── Rutas a los scripts ────────────────────────────────────────────────────────
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
@@ -529,6 +538,21 @@ def procesar():
 
             # Calcular número OT del nombre de archivo
             ot_num = ot_filename.replace('.docx', '')
+            
+            # Registrar en log de auditoría para INACAL
+            if AUDIT_ENABLED:
+                audit_data = {
+                    'ot_number': ot_num,
+                    'expediente': data.get('expediente', ''),
+                    'numero_proforma': data.get('numero_proforma', ''),
+                    'cliente': data.get('cliente', ''),
+                    'ruc_cliente': data.get('ruc_cliente', ''),
+                    'total_items': data.get('total_items', 0),
+                    'tipo_servicio': data.get('tipo_servicio', 'GENERAL'),
+                    'fecha_emision': data.get('fecha_emision', ''),
+                    'plazo_entrega': data.get('plazo_entrega', ''),
+                }
+                audit_logger.register_ot(audit_data, ot_path)
 
             return jsonify({
                 'aprobada':  True,
@@ -622,6 +646,41 @@ def descargar_pdf(filename):
 
 
 # ── Arranque ───────────────────────────────────────────────────────────────────
+@app.route('/auditoria/exportar')
+def exportar_auditoria():
+    """Exporta el registro de auditoría en CSV para INACAL"""
+    if not AUDIT_ENABLED:
+        return jsonify({'error': 'Sistema de auditoría no disponible'}), 503
+    
+    import tempfile
+    csv_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    csv_path = csv_file.name
+    csv_file.close()
+    
+    # Exportar últimos 12 meses
+    from datetime import datetime, timedelta
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    
+    if audit_logger.export_audit_csv(csv_path, start_date, end_date):
+        return send_file(
+            csv_path,
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'auditoria_inacal_{end_date}.csv'
+        )
+    else:
+        return jsonify({'error': 'No hay registros para exportar'}), 404
+
+@app.route('/auditoria/estadisticas')
+def estadisticas_auditoria():
+    """Muestra estadísticas del sistema para auditoría"""
+    if not AUDIT_ENABLED:
+        return jsonify({'error': 'Sistema de auditoría no disponible'}), 503
+    
+    stats = audit_logger.get_statistics()
+    return jsonify(stats)
+
 if __name__ == '__main__':
     import os
     port = int(os.environ.get('PORT', 5000))
