@@ -1,30 +1,12 @@
 {
-  "name": "metromecanica-ot-generator",
+  "name": "metromecanica-ot",
   "version": "1.0.0",
-  "description": "Sistema generador de órdenes de trabajo",
+  "description": "Sistema generador de ordenes de trabajo",
   "main": "generate_ot.js",
   "dependencies": {
-    "docx": "^8.5.0"
+    "docx": "8.5.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   }
 }
-```
-
-5. **"Commit changes"**
-
----
-
-## **📝 TERCERO: Volver a Render y configurar**
-
-1. Vuelve a Render, en Settings
-
-2. **Build Command:**
-```
-pip install -r requirements.txt && npm install
-```
-
-3. **Start Command:**
-```
-gunicorn app:app
