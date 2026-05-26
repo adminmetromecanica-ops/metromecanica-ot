@@ -35,32 +35,27 @@ def extraer_datos(ruta_excel):
 
 def construir_nombre(datos, tipo):
     cert  = datos.get("n_certificado", "CERT").replace("/", "-")
-    ot    = datos.get("orden_trabajo", "")
-    inst  = datos.get("instrumento", tipo)[:15]
     fecha = datetime.date.today().strftime("%Y%m%d")
-    nombre = f"{cert}_{inst}_{ot}_{fecha}.pdf"
+    nombre = f"{cert}_{fecha}.pdf"
     for c in ['\\','/',':','*','?','"','<','>','|',' ']:
         nombre = nombre.replace(c, '_')
+    if len(nombre) > 80:
+        nombre = nombre[:76] + ".pdf"
     return nombre
 
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
     if 'file' not in request.files:
         return jsonify({"error": "No se envió archivo"}), 400
-
     archivo = request.files['file']
     nombre  = archivo.filename
-
     tipo = detectar_tipo(nombre)
     if tipo is None:
         return jsonify({"error": f"Tipo no reconocido: {nombre}"}), 400
-
     with tempfile.TemporaryDirectory() as tmpdir:
         ruta_excel = os.path.join(tmpdir, nombre)
         archivo.save(ruta_excel)
-
         datos = extraer_datos(ruta_excel)
-
         cmd = [
             "libreoffice", "--headless",
             "--convert-to", "pdf",
@@ -70,11 +65,9 @@ def generar_certificado():
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
-
         pdf_generado = os.path.join(tmpdir, os.path.splitext(nombre)[0] + ".pdf")
         if not os.path.exists(pdf_generado):
             return jsonify({"error": "PDF no generado"}), 500
-
         try:
             from pypdf import PdfReader, PdfWriter
             reader = PdfReader(pdf_generado)
@@ -88,7 +81,6 @@ def generar_certificado():
                 writer.write(f)
         except Exception:
             pdf_final = pdf_generado
-
         return send_file(
             pdf_final,
             mimetype='application/pdf',
