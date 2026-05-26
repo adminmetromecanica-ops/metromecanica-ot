@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y \
     zlib1g-dev \
     curl \
     libreoffice \
+    libreoffice-l10n-es \
+    locales \
+    && locale-gen es_PE.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -27,4 +30,4 @@ RUN mkdir -p ordenes_generadas
 
 EXPOSE 10000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "app:app"]
+CMD ["sh", "-c", "LANG=es_PE.UTF-8 LC_ALL=es_PE.UTF-8 gunicorn --bind 0.0.0.0:10000 app:app"]
