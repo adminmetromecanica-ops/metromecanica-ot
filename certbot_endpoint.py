@@ -24,6 +24,9 @@ HOJA_CERT = {
 
 HOJAS_DATOS = ["REGISTRO", "DATOS_EQUIPO", "DATOS", "EQUIPO", "INFO", "INFORMACION"]
 
+# Celdas donde puede estar el N° Certificado según plantilla
+CELDAS_CERT = ["B5", "J7", "B7", "J5"]
+
 def detectar_tipo(nombre):
     nombre = nombre.upper()
     for tipo in HOJA_CERT:
@@ -32,18 +35,22 @@ def detectar_tipo(nombre):
     return None
 
 def leer_celda(ws, coord):
-    val = ws[coord].value
-    if val is None:
+    try:
+        val = ws[coord].value
+        if val is None:
+            return ""
+        s = str(val).strip()
+        if s.lower() in ["none", "nan", ""]:
+            return ""
+        return s
+    except Exception:
         return ""
-    s = str(val).strip()
-    if s.lower() in ["none", "nan", ""]:
-        return ""
-    return s
 
 def extraer_datos(ruta_excel):
     try:
-        # Intentar primero con data_only=True
         wb = load_workbook(ruta_excel, read_only=True, data_only=True)
+        
+        # Buscar hoja de datos
         ws = None
         for nombre_hoja in HOJAS_DATOS:
             if nombre_hoja in wb.sheetnames:
@@ -52,45 +59,44 @@ def extraer_datos(ruta_excel):
         if ws is None:
             ws = wb.worksheets[0]
 
-        datos = {
-            "n_certificado": leer_celda(ws, "J7"),
-            "orden_trabajo": leer_celda(ws, "J5"),
-            "solicitante":   leer_celda(ws, "J9"),
-            "instrumento":   leer_celda(ws, "J12"),
-        }
-        wb.close()
+        # Buscar N° certificado en múltiples celdas posibles
+        n_cert = ""
+        for celda in CELDAS_CERT:
+            val = leer_celda(ws, celda)
+            if val and len(val) > 3:
+                n_cert = val
+                break
 
-        # Si J7 vacío buscar en B7
-        if not datos["n_certificado"]:
-            wb2 = load_workbook(ruta_excel, read_only=True, data_only=True)
-            ws2 = None
-            for nombre_hoja in HOJAS_DATOS:
-                if nombre_hoja in wb2.sheetnames:
-                    ws2 = wb2[nombre_hoja]
-                    break
-            if ws2 is None:
-                ws2 = wb2.worksheets[0]
-            datos["n_certificado"] = leer_celda(ws2, "B7")
-            wb2.close()
-
-        # Si aun vacío buscar en todo el libro
-        if not datos["n_certificado"]:
-            wb3 = load_workbook(ruta_excel, read_only=True, data_only=True)
-            for sheet in wb3.worksheets:
-                for row in sheet.iter_rows(min_row=1, max_row=20, values_only=True):
+        # Si aún vacío buscar patrón ML en todo el libro
+        if not n_cert:
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(min_row=1, max_row=25, values_only=True):
                     for cell in row:
                         if cell and isinstance(cell, str):
                             c = cell.strip()
-                            if len(c) > 5 and ('-' in c) and any(p in c.upper() for p in ['MLL','MLF','MLE','MLP','MLT','MLM','MLQ','MLC']):
-                                datos["n_certificado"] = c
+                            if len(c) > 5 and '-' in c and any(
+                                c.upper().startswith(p) for p in
+                                ['MLL','MLF','MLE','MLP','MLT','MLM','MLQ','MLC','MLB']
+                            ):
+                                n_cert = c
                                 break
-                    if datos["n_certificado"]:
+                    if n_cert:
                         break
-                if datos["n_certificado"]:
+                if n_cert:
                     break
-            wb3.close()
 
-        return datos
+        # Leer resto de datos — intentar múltiples celdas
+        ot       = leer_celda(ws, "D5") or leer_celda(ws, "J5") or leer_celda(ws, "B8")
+        solic    = leer_celda(ws, "B7") or leer_celda(ws, "J9") or leer_celda(ws, "B11")
+        instrum  = leer_celda(ws, "B17") or leer_celda(ws, "J12") or leer_celda(ws, "B16")
+
+        wb.close()
+        return {
+            "n_certificado": n_cert,
+            "orden_trabajo": ot,
+            "solicitante":   solic,
+            "instrumento":   instrum,
+        }
     except Exception:
         return {
             "n_certificado": "CERT",
