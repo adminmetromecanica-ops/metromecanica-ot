@@ -44,7 +44,12 @@ def extraer_datos(ruta_excel):
 
         def cel(coord):
             val = ws[coord].value
-            return str(val).strip() if val is not None else ""
+            if val is None:
+                return ""
+            s = str(val).strip()
+            if s.lower() in ["none", "nan", ""]:
+                return ""
+            return s
 
         datos = {
             "n_certificado": cel("J7"),
@@ -52,6 +57,15 @@ def extraer_datos(ruta_excel):
             "solicitante":   cel("J9"),
             "instrumento":   cel("J12"),
         }
+
+        # Si J7 vacío intentar B7
+        if not datos["n_certificado"]:
+            datos["n_certificado"] = cel("B7")
+
+        # Si solicitante vacío intentar J10
+        if not datos["solicitante"]:
+            datos["solicitante"] = cel("J10")
+
         wb.close()
         return datos
     except Exception:
@@ -69,19 +83,20 @@ def construir_nombre(datos, tipo):
     ot    = datos.get("orden_trabajo", "")
     fecha = datetime.date.today().strftime("%Y%m%d")
 
-    if not cert or cert == "None" or cert == "":
+    if not cert or cert.lower() in ["none", "nan", ""]:
         cert = "CERT"
-    if not inst or inst == "None":
+    if not inst or inst.lower() in ["none", "nan"]:
         inst = ""
-    if not solic or solic == "None":
+    if not solic or solic.lower() in ["none", "nan"]:
         solic = ""
-    if not ot or ot == "None":
+    if not ot or ot.lower() in ["none", "nan"]:
         ot = ""
 
     nombre = f"{cert}_{inst}_{solic}_{ot}_{fecha}.pdf"
     for c in ['\\', '/', ':', '*', '?', '"', '<', '>', '|', ' ', '\n', '\r']:
         nombre = nombre.replace(c, '_')
-    nombre = nombre.replace('__', '_').replace('__', '_')
+    while '__' in nombre:
+        nombre = nombre.replace('__', '_')
     if len(nombre) > 150:
         nombre = nombre[:146] + ".pdf"
     return nombre
