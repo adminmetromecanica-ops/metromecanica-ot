@@ -56,13 +56,21 @@ def generar_certificado():
         ruta_excel = os.path.join(tmpdir, nombre)
         archivo.save(ruta_excel)
         datos = extraer_datos(ruta_excel)
+
+        env = os.environ.copy()
+        env["LANG"] = "es_PE.UTF-8"
+        env["LC_ALL"] = "es_PE.UTF-8"
+        env["LC_NUMERIC"] = "es_PE.UTF-8"
+
         cmd = [
-            "libreoffice", "--headless",
+            "libreoffice",
+            "--headless",
+            "--infilter=Calc MS Excel 2007 XML",
             "--convert-to", "pdf",
             "--outdir", tmpdir,
             ruta_excel
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
         if result.returncode != 0:
             return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
         pdf_generado = os.path.join(tmpdir, os.path.splitext(nombre)[0] + ".pdf")
