@@ -9,6 +9,17 @@ certbot_bp = Blueprint('certbot', __name__)
 
 HOJA_CERT = {
     "TORQUIMETRO": "CERTIFICADO",
+    "BALANZA":     "CERTIFICADO",
+    "PESAS":       "CERTIFICADO",
+    "PRESION":     "CERTIFICADO",
+    "TEMPERATURA": "CERTIFICADO",
+    "FUERZA":      "CERTIFICADO",
+    "LONGITUD":    "CERTIFICADO",
+    "ENERGIA":     "CERTIFICADO",
+    "MEDICO":      "CERTIFICADO",
+    "QUIMICA":     "CERTIFICADO",
+    "ENSAYO":      "CERTIFICADO",
+    "OTROS":       "CERTIFICADO",
 }
 
 def detectar_tipo(nombre):
@@ -19,19 +30,27 @@ def detectar_tipo(nombre):
     return None
 
 def extraer_datos(ruta_excel):
-    wb = load_workbook(ruta_excel, read_only=True, data_only=True)
-    ws = wb["REGISTRO"]
-    def cel(coord):
-        val = ws[coord].value
-        return str(val).strip() if val is not None else ""
-    datos = {
-        "n_certificado": cel("J7"),
-        "orden_trabajo": cel("J5"),
-        "solicitante": cel("J9"),
-        "instrumento": cel("J12"),
-    }
-    wb.close()
-    return datos
+    try:
+        wb = load_workbook(ruta_excel, read_only=True, data_only=True)
+        ws = wb["REGISTRO"]
+        def cel(coord):
+            val = ws[coord].value
+            return str(val).strip() if val is not None else ""
+        datos = {
+            "n_certificado": cel("J7"),
+            "orden_trabajo": cel("J5"),
+            "solicitante":   cel("J9"),
+            "instrumento":   cel("J12"),
+        }
+        wb.close()
+        return datos
+    except Exception:
+        return {
+            "n_certificado": "CERT",
+            "orden_trabajo": "",
+            "solicitante":   "",
+            "instrumento":   "",
+        }
 
 def construir_nombre(datos, tipo):
     cert  = datos.get("n_certificado", "CERT").replace("/", "-")
@@ -58,14 +77,13 @@ def generar_certificado():
         datos = extraer_datos(ruta_excel)
 
         env = os.environ.copy()
-        env["LANG"] = "es_PE.UTF-8"
-        env["LC_ALL"] = "es_PE.UTF-8"
+        env["LANG"]       = "es_PE.UTF-8"
+        env["LC_ALL"]     = "es_PE.UTF-8"
         env["LC_NUMERIC"] = "es_PE.UTF-8"
 
         cmd = [
             "libreoffice",
             "--headless",
-            "--infilter=Calc MS Excel 2007 XML",
             "--convert-to", "pdf",
             "--outdir", tmpdir,
             ruta_excel
@@ -73,9 +91,11 @@ def generar_certificado():
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
         if result.returncode != 0:
             return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
+
         pdf_generado = os.path.join(tmpdir, os.path.splitext(nombre)[0] + ".pdf")
         if not os.path.exists(pdf_generado):
             return jsonify({"error": "PDF no generado"}), 500
+
         try:
             from pypdf import PdfReader, PdfWriter
             reader = PdfReader(pdf_generado)
@@ -89,6 +109,7 @@ def generar_certificado():
                 writer.write(f)
         except Exception:
             pdf_final = pdf_generado
+
         return send_file(
             pdf_final,
             mimetype='application/pdf',
