@@ -31,8 +31,18 @@ def detectar_tipo(nombre):
             return tipo
     return None
 
+def leer_celda(ws, coord):
+    val = ws[coord].value
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s.lower() in ["none", "nan", ""]:
+        return ""
+    return s
+
 def extraer_datos(ruta_excel):
     try:
+        # Intentar primero con data_only=True
         wb = load_workbook(ruta_excel, read_only=True, data_only=True)
         ws = None
         for nombre_hoja in HOJAS_DATOS:
@@ -42,31 +52,44 @@ def extraer_datos(ruta_excel):
         if ws is None:
             ws = wb.worksheets[0]
 
-        def cel(coord):
-            val = ws[coord].value
-            if val is None:
-                return ""
-            s = str(val).strip()
-            if s.lower() in ["none", "nan", ""]:
-                return ""
-            return s
-
         datos = {
-            "n_certificado": cel("J7"),
-            "orden_trabajo": cel("J5"),
-            "solicitante":   cel("J9"),
-            "instrumento":   cel("J12"),
+            "n_certificado": leer_celda(ws, "J7"),
+            "orden_trabajo": leer_celda(ws, "J5"),
+            "solicitante":   leer_celda(ws, "J9"),
+            "instrumento":   leer_celda(ws, "J12"),
         }
-
-        # Si J7 vacío intentar B7
-        if not datos["n_certificado"]:
-            datos["n_certificado"] = cel("B7")
-
-        # Si solicitante vacío intentar J10
-        if not datos["solicitante"]:
-            datos["solicitante"] = cel("J10")
-
         wb.close()
+
+        # Si J7 vacío buscar en B7
+        if not datos["n_certificado"]:
+            wb2 = load_workbook(ruta_excel, read_only=True, data_only=True)
+            ws2 = None
+            for nombre_hoja in HOJAS_DATOS:
+                if nombre_hoja in wb2.sheetnames:
+                    ws2 = wb2[nombre_hoja]
+                    break
+            if ws2 is None:
+                ws2 = wb2.worksheets[0]
+            datos["n_certificado"] = leer_celda(ws2, "B7")
+            wb2.close()
+
+        # Si aun vacío buscar en todo el libro
+        if not datos["n_certificado"]:
+            wb3 = load_workbook(ruta_excel, read_only=True, data_only=True)
+            for sheet in wb3.worksheets:
+                for row in sheet.iter_rows(min_row=1, max_row=20, values_only=True):
+                    for cell in row:
+                        if cell and isinstance(cell, str):
+                            c = cell.strip()
+                            if len(c) > 5 and ('-' in c) and any(p in c.upper() for p in ['MLL','MLF','MLE','MLP','MLT','MLM','MLQ','MLC']):
+                                datos["n_certificado"] = c
+                                break
+                    if datos["n_certificado"]:
+                        break
+                if datos["n_certificado"]:
+                    break
+            wb3.close()
+
         return datos
     except Exception:
         return {
