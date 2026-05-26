@@ -22,6 +22,8 @@ HOJA_CERT = {
     "OTROS":       "CERTIFICADO",
 }
 
+HOJAS_DATOS = ["REGISTRO", "DATOS_EQUIPO", "DATOS", "EQUIPO", "INFO", "INFORMACION"]
+
 def detectar_tipo(nombre):
     nombre = nombre.upper()
     for tipo in HOJA_CERT:
@@ -32,10 +34,18 @@ def detectar_tipo(nombre):
 def extraer_datos(ruta_excel):
     try:
         wb = load_workbook(ruta_excel, read_only=True, data_only=True)
-        ws = wb["REGISTRO"]
+        ws = None
+        for nombre_hoja in HOJAS_DATOS:
+            if nombre_hoja in wb.sheetnames:
+                ws = wb[nombre_hoja]
+                break
+        if ws is None:
+            ws = wb.worksheets[0]
+
         def cel(coord):
             val = ws[coord].value
             return str(val).strip() if val is not None else ""
+
         datos = {
             "n_certificado": cel("J7"),
             "orden_trabajo": cel("J5"),
@@ -53,13 +63,27 @@ def extraer_datos(ruta_excel):
         }
 
 def construir_nombre(datos, tipo):
-    cert  = datos.get("n_certificado", "CERT").replace("/", "-")
+    cert  = datos.get("n_certificado", "CERT")
+    inst  = datos.get("instrumento", "")
+    solic = datos.get("solicitante", "")
+    ot    = datos.get("orden_trabajo", "")
     fecha = datetime.date.today().strftime("%Y%m%d")
-    nombre = f"{cert}_{fecha}.pdf"
-    for c in ['\\','/',':','*','?','"','<','>','|',' ']:
+
+    if not cert or cert == "None" or cert == "":
+        cert = "CERT"
+    if not inst or inst == "None":
+        inst = ""
+    if not solic or solic == "None":
+        solic = ""
+    if not ot or ot == "None":
+        ot = ""
+
+    nombre = f"{cert}_{inst}_{solic}_{ot}_{fecha}.pdf"
+    for c in ['\\', '/', ':', '*', '?', '"', '<', '>', '|', ' ', '\n', '\r']:
         nombre = nombre.replace(c, '_')
-    if len(nombre) > 80:
-        nombre = nombre[:76] + ".pdf"
+    nombre = nombre.replace('__', '_').replace('__', '_')
+    if len(nombre) > 150:
+        nombre = nombre[:146] + ".pdf"
     return nombre
 
 @certbot_bp.route('/generar-certificado', methods=['POST'])
