@@ -138,8 +138,17 @@ def escribir_celda(ws, coord, valor):
     except Exception:
         pass
 
+def redondear(val, decimales=4):
+    try:
+        f = float(val)
+        r = round(f, decimales)
+        if r == int(r):
+            return int(r)
+        return r
+    except Exception:
+        return val
+
 def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
-    # Leer valores calculados
     wb_vals = load_workbook(ruta_excel, data_only=True)
 
     reg = None
@@ -161,40 +170,37 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         s = str(val).strip()
         return "" if s.lower() in ["none","nan"] else s
 
-    # Mapeo basado en tu Excel real (REGISTRO)
     r = {
-        "cert":    v(reg, "B8"),
-        "ot":      v(reg, "D5"),
-        "fecha_e": v(reg, "D11"),
-        "fecha_c": v(reg, "D12"),
-        "cliente": v(reg, "B9"),
-        "dir":     v(reg, "B10"),
-        "instrum": v(reg, "B15"),
-        "marca":   v(reg, "D15"),
-        "modelo":  v(reg, "B16"),
-        "serie":   v(reg, "D16") or v(reg, "B5"),
-        "ident":   v(reg, "B17"),
-        "rmin":    v(reg, "B18"),
-        "rmax":    v(reg, "D18"),
-        "resol":   v(reg, "B19"),
-        "unidad":  v(reg, "D19"),
-        "tipo_eq": v(reg, "B20"),
+        "cert":      v(reg, "B8"),
+        "ot":        v(reg, "D5"),
+        "fecha_e":   v(reg, "D11"),
+        "fecha_c":   v(reg, "D12"),
+        "cliente":   v(reg, "B9"),
+        "dir":       v(reg, "B10"),
+        "instrum":   v(reg, "B15"),
+        "marca":     v(reg, "D15"),
+        "modelo":    v(reg, "B16"),
+        "serie":     v(reg, "D16") or v(reg, "B5"),
+        "ident":     v(reg, "B17"),
+        "rmin":      v(reg, "B18"),
+        "rmax":      v(reg, "D18"),
+        "resol":     v(reg, "B19"),
+        "unidad":    v(reg, "D19"),
+        "tipo_eq":   v(reg, "B20"),
         "ubicacion": v(reg, "D20"),
-        "ti":      v(reg, "B23"),
-        "tf":      v(reg, "D23"),
-        "hi":      v(reg, "B24"),
-        "hf":      v(reg, "D24"),
-        "obs":     v(reg, "B27"),
+        "ti":        v(reg, "B23"),
+        "tf":        v(reg, "D23"),
+        "hi":        v(reg, "B24"),
+        "hf":        v(reg, "D24"),
+        "obs":       v(reg, "B27"),
     }
 
-    # Leer mediciones — filas 6-15 en MEDICION
     med_data = []
     if med:
         for row_idx in range(6, 16):
             fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
             med_data.append(fila)
 
-    # Leer trazabilidad — filas 103-105 en MEDICION
     traz_data = []
     if med:
         for row_idx in range(103, 106):
@@ -203,12 +209,10 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
 
     wb_vals.close()
 
-    # Abrir para editar
     wb_edit = load_workbook(ruta_excel)
     wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
     wc.sheet_state = "visible"
 
-    # Inyectar datos según mapeo real del CERTIFICADO
     escribir_celda(wc, "A7",  r["cert"])
     escribir_celda(wc, "B9",  r["ot"])
     escribir_celda(wc, "D9",  r["fecha_e"])
@@ -227,15 +231,15 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     escribir_celda(wc, "B31", f"{r['ti']} °C A {r['tf']} °C")
     escribir_celda(wc, "B32", f"{r['hi']} %HR A {r['hf']} %HR")
 
-    # Inyectar mediciones (filas 81-90)
+    # Inyectar mediciones con redondeo correcto
     for i, fila in enumerate(med_data):
         row = 81 + i
-        escribir_celda(wc, f"A{row}", fila[0])
-        escribir_celda(wc, f"B{row}", fila[1])
-        escribir_celda(wc, f"C{row}", fila[2])
-        escribir_celda(wc, f"D{row}", fila[3])
+        escribir_celda(wc, f"A{row}", redondear(fila[0], 3))
+        escribir_celda(wc, f"B{row}", redondear(fila[1], 3))
+        escribir_celda(wc, f"C{row}", redondear(fila[2], 1))
+        escribir_celda(wc, f"D{row}", redondear(fila[3], 4))
 
-    # Inyectar trazabilidad (filas 71-73)
+    # Inyectar trazabilidad
     for i, fila in enumerate(traz_data):
         row = 71 + i
         escribir_celda(wc, f"A{row}", fila[0])
