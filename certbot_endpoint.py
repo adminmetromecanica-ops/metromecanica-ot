@@ -82,9 +82,9 @@ def extraer_datos(ruta_excel):
                 if n_cert:
                     break
 
-        ot      = leer_celda(ws, "D5") or leer_celda(ws, "J5") or leer_celda(ws, "B8")
-        solic   = leer_celda(ws, "B9") or leer_celda(ws, "J9") or leer_celda(ws, "B11")
-        instrum = leer_celda(ws, "B15") or leer_celda(ws, "J12") or leer_celda(ws, "B16") or leer_celda(ws, "B17")
+        ot      = leer_celda(ws, "D5") or leer_celda(ws, "J5")
+        solic   = leer_celda(ws, "B9") or leer_celda(ws, "J9")
+        instrum = leer_celda(ws, "B15") or leer_celda(ws, "J12")
 
         wb.close()
         return {"n_certificado": n_cert, "orden_trabajo": ot, "solicitante": solic, "instrumento": instrum}
@@ -125,17 +125,21 @@ def construir_nombre(datos, tipo, nombre_archivo=""):
     return nombre
 
 def escribir_celda(ws, coord, valor):
-    cell = ws[coord]
-    if isinstance(cell, MergedCell):
-        for rng in ws.merged_cells.ranges:
-            if coord in rng:
-                master = ws.cell(row=rng.min_row, column=rng.min_col)
-                master.value = valor
-                return
-    else:
-        cell.value = valor
+    try:
+        cell = ws[coord]
+        if isinstance(cell, MergedCell):
+            for rng in ws.merged_cells.ranges:
+                if coord in rng:
+                    master = ws.cell(row=rng.min_row, column=rng.min_col)
+                    master.value = valor
+                    return
+        else:
+            cell.value = valor
+    except Exception:
+        pass
 
 def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
+    # Leer valores calculados
     wb_vals = load_workbook(ruta_excel, data_only=True)
 
     reg = None
@@ -157,22 +161,25 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         s = str(val).strip()
         return "" if s.lower() in ["none","nan"] else s
 
+    # Mapeo basado en tu Excel real (REGISTRO)
     r = {
-        "cert":    v(reg, "B8") or v(reg, "B5"),
+        "cert":    v(reg, "B8"),
         "ot":      v(reg, "D5"),
         "fecha_e": v(reg, "D11"),
+        "fecha_c": v(reg, "D12"),
         "cliente": v(reg, "B9"),
         "dir":     v(reg, "B10"),
-        "fecha_c": v(reg, "B11"),
         "instrum": v(reg, "B15"),
         "marca":   v(reg, "D15"),
         "modelo":  v(reg, "B16"),
-        "serie":   v(reg, "D16"),
+        "serie":   v(reg, "D16") or v(reg, "B5"),
         "ident":   v(reg, "B17"),
         "rmin":    v(reg, "B18"),
         "rmax":    v(reg, "D18"),
         "resol":   v(reg, "B19"),
         "unidad":  v(reg, "D19"),
+        "tipo_eq": v(reg, "B20"),
+        "ubicacion": v(reg, "D20"),
         "ti":      v(reg, "B23"),
         "tf":      v(reg, "D23"),
         "hi":      v(reg, "B24"),
@@ -180,44 +187,62 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         "obs":     v(reg, "B27"),
     }
 
-    med_ext = []
+    # Leer mediciones — filas 6-15 en MEDICION
+    med_data = []
     if med:
-        for row_idx in range(5, 15):
+        for row_idx in range(6, 16):
             fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
-            med_ext.append(fila)
+            med_data.append(fila)
+
+    # Leer trazabilidad — filas 103-105 en MEDICION
+    traz_data = []
+    if med:
+        for row_idx in range(103, 106):
+            fila = [v(med, f"{col}{row_idx}") for col in ["D","E","F","G"]]
+            traz_data.append(fila)
 
     wb_vals.close()
 
+    # Abrir para editar
     wb_edit = load_workbook(ruta_excel)
     wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
-
-    # Hacer visible la hoja CERTIFICADO primero
     wc.sheet_state = "visible"
 
-    escribir_celda(wc, "A2",  r["cert"])
-    escribir_celda(wc, "B4",  r["ot"])
-    escribir_celda(wc, "D4",  r["fecha_e"])
-    escribir_celda(wc, "B7",  r["cliente"])
-    escribir_celda(wc, "B8",  r["dir"])
-    escribir_celda(wc, "B11", r["instrum"])
-    escribir_celda(wc, "B12", r["marca"])
-    escribir_celda(wc, "B13", r["modelo"])
-    escribir_celda(wc, "B14", r["serie"])
-    escribir_celda(wc, "B15", r["ident"])
-    escribir_celda(wc, "B16", f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}")
-    escribir_celda(wc, "B17", f"{r['resol']} {r['unidad']}")
-    escribir_celda(wc, "B19", r["fecha_c"])
-    escribir_celda(wc, "B23", f"{r['ti']} °C A {r['tf']} °C")
-    escribir_celda(wc, "D23", f"{r['hi']} %HR A {r['hf']} %HR")
+    # Inyectar datos según mapeo real del CERTIFICADO
+    escribir_celda(wc, "A7",  r["cert"])
+    escribir_celda(wc, "B9",  r["ot"])
+    escribir_celda(wc, "D9",  r["fecha_e"])
+    escribir_celda(wc, "B12", r["cliente"])
+    escribir_celda(wc, "B13", r["dir"])
+    escribir_celda(wc, "B16", r["instrum"])
+    escribir_celda(wc, "B17", r["marca"])
+    escribir_celda(wc, "B18", r["modelo"])
+    escribir_celda(wc, "B19", r["serie"])
+    escribir_celda(wc, "B20", r["ident"])
+    escribir_celda(wc, "B21", f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}")
+    escribir_celda(wc, "B22", f"{r['resol']} {r['unidad']}")
+    escribir_celda(wc, "B23", r["tipo_eq"])
+    escribir_celda(wc, "A24", r["ubicacion"])
+    escribir_celda(wc, "B26", r["fecha_c"])
+    escribir_celda(wc, "B31", f"{r['ti']} °C A {r['tf']} °C")
+    escribir_celda(wc, "B32", f"{r['hi']} %HR A {r['hf']} %HR")
 
-    for i, fila in enumerate(med_ext):
-        row = 28 + i
+    # Inyectar mediciones (filas 81-90)
+    for i, fila in enumerate(med_data):
+        row = 81 + i
         escribir_celda(wc, f"A{row}", fila[0])
         escribir_celda(wc, f"B{row}", fila[1])
         escribir_celda(wc, f"C{row}", fila[2])
         escribir_celda(wc, f"D{row}", fila[3])
 
-    # Hacer visibles y eliminar hojas que no son CERTIFICADO
+    # Inyectar trazabilidad (filas 71-73)
+    for i, fila in enumerate(traz_data):
+        row = 71 + i
+        escribir_celda(wc, f"A{row}", fila[0])
+        escribir_celda(wc, f"B{row}", fila[1])
+        escribir_celda(wc, f"C{row}", fila[2])
+
+    # Eliminar otras hojas
     hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
     for h in hojas_borrar:
         wb_edit[h].sheet_state = "visible"
