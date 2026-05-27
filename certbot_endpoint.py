@@ -23,7 +23,7 @@ HOJA_CERT = {
 }
 
 HOJAS_DATOS = ["REGISTRO", "DATOS_EQUIPO", "DATOS", "EQUIPO", "INFO", "INFORMACION"]
-CELDAS_CERT = ["B5", "J7", "B7", "J5"]
+CELDAS_CERT = ["B8", "B5", "J7", "B7", "J5"]
 
 def detectar_tipo(nombre):
     nombre = nombre.upper()
@@ -58,7 +58,7 @@ def extraer_datos(ruta_excel):
         n_cert = ""
         for celda in CELDAS_CERT:
             val = leer_celda(ws, celda)
-            if val and len(val) > 3:
+            if val and len(val) > 3 and '-' in val:
                 n_cert = val
                 break
 
@@ -80,8 +80,8 @@ def extraer_datos(ruta_excel):
                     break
 
         ot      = leer_celda(ws, "D5") or leer_celda(ws, "J5") or leer_celda(ws, "B8")
-        solic   = leer_celda(ws, "B7") or leer_celda(ws, "J9") or leer_celda(ws, "B11")
-        instrum = leer_celda(ws, "B17") or leer_celda(ws, "J12") or leer_celda(ws, "B16")
+        solic   = leer_celda(ws, "B9") or leer_celda(ws, "J9") or leer_celda(ws, "B11")
+        instrum = leer_celda(ws, "B15") or leer_celda(ws, "J12") or leer_celda(ws, "B16") or leer_celda(ws, "B17")
 
         wb.close()
         return {
@@ -123,15 +123,6 @@ def construir_nombre(datos, tipo):
         nombre = nombre[:146] + ".pdf"
     return nombre
 
-def obtener_indice_hoja(ruta_excel, nombre_hoja):
-    try:
-        wb = load_workbook(ruta_excel, read_only=True)
-        idx = wb.sheetnames.index(nombre_hoja)
-        wb.close()
-        return idx
-    except Exception:
-        return -1
-
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
     if 'file' not in request.files:
@@ -152,78 +143,61 @@ def generar_certificado():
         env["LC_ALL"]     = "es_PE.UTF-8"
         env["LC_NUMERIC"] = "es_PE.UTF-8"
 
-        # Convertir libro completo a PDF
-        cmd = [
-            "libreoffice",
-            "--headless",
-            "--convert-to", "pdf",
-            "--outdir", tmpdir,
-            ruta_excel
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
-        if result.returncode != 0:
-            return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
+        # Convertir SOLO la hoja CERTIFICADO a PDF
+        # Usando LibreOffice con filtro para seleccionar hoja específica
+        try:
+            from openpyxl import load_workbook as lw
+            wb_temp = lw(ruta_excel)
+            sheetnames = wb_temp.sheetnames
+            wb_temp.close()
 
-        pdf_generado = os.path.join(tmpdir, os.path.splitext(nombre)[0] + ".pdf")
+            # Crear Excel temporal con SOLO la hoja CERTIFICADO
+            wb_solo = lw(ruta_excel)
+            hojas_borrar = [s for s in wb_solo.sheetnames if s != "CERTIFICADO"]
+            for h in hojas_borrar:
+                del wb_solo[h]
+            
+            ruta_cert_only = os.path.join(tmpdir, "cert_only.xlsx")
+            wb_solo.save(ruta_cert_only)
+            wb_solo.close()
+
+            cmd = [
+                "libreoffice", "--headless",
+                "--convert-to", "pdf",
+                "--outdir", tmpdir,
+                ruta_cert_only
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
+
+            if result.returncode != 0:
+                raise Exception(result.stderr)
+
+            pdf_generado = os.path.join(tmpdir, "cert_only.pdf")
+
+        except Exception:
+            # Fallback: convertir libro completo y tomar última página
+            cmd = [
+                "libreoffice", "--headless",
+                "--convert-to", "pdf",
+                "--outdir", tmpdir,
+                ruta_excel
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
+            pdf_generado = os.path.join(tmpdir, os.path.splitext(nombre)[0] + ".pdf")
+
         if not os.path.exists(pdf_generado):
             return jsonify({"error": "PDF no generado"}), 500
 
-        # Extraer solo páginas de la hoja CERTIFICADO
+        pdf_final = os.path.join(tmpdir, construir_nombre(datos, tipo))
+
         try:
             from pypdf import PdfReader, PdfWriter
-            import subprocess as sp
-
-            # Obtener número de páginas por hoja usando LibreOffice info
-            # Estrategia: calcular páginas antes y después de cada hoja
-            wb_check = load_workbook(ruta_excel, read_only=True)
-            sheetnames = wb_check.sheetnames
-            wb_check.close()
-
-            hoja_cert = HOJA_CERT.get(tipo, "CERTIFICADO")
-            
-            if hoja_cert in sheetnames:
-                idx_cert = sheetnames.index(hoja_cert)
-            else:
-                idx_cert = len(sheetnames) - 1
-
-            # Convertir hojas anteriores para saber cuántas páginas ocupan
-            reader_full = PdfReader(pdf_generado)
-            total_pages = len(reader_full.pages)
-
-            # Convertir solo hojas anteriores al certificado
-            paginas_antes = 0
-            if idx_cert > 0:
-                # Crear Excel temporal solo con hojas anteriores
-                try:
-                    from openpyxl import load_workbook as lw
-                    wb_temp = lw(ruta_excel)
-                    hojas_a_borrar = sheetnames[idx_cert:]
-                    for h in hojas_a_borrar:
-                        if h in wb_temp.sheetnames:
-                            del wb_temp[h]
-                    ruta_temp = os.path.join(tmpdir, "prev_sheets.xlsx")
-                    wb_temp.save(ruta_temp)
-
-                    cmd2 = ["libreoffice", "--headless", "--convert-to", "pdf",
-                            "--outdir", tmpdir, ruta_temp]
-                    sp.run(cmd2, capture_output=True, text=True, timeout=60, env=env)
-
-                    pdf_prev = os.path.join(tmpdir, "prev_sheets.pdf")
-                    if os.path.exists(pdf_prev):
-                        reader_prev = PdfReader(pdf_prev)
-                        paginas_antes = len(reader_prev.pages)
-                except Exception:
-                    paginas_antes = 0
-
-            # Extraer páginas del certificado
+            reader = PdfReader(pdf_generado)
             writer = PdfWriter()
-            for i in range(paginas_antes, total_pages):
-                writer.add_page(reader_full.pages[i])
-
-            pdf_final = os.path.join(tmpdir, construir_nombre(datos, tipo))
+            for page in reader.pages:
+                writer.add_page(page)
             with open(pdf_final, "wb") as f:
                 writer.write(f)
-
         except Exception:
             pdf_final = pdf_generado
 
