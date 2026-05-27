@@ -159,7 +159,8 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     if reg is None:
         reg = wb_vals.worksheets[0]
 
-    med = wb_vals["MEDICION"] if "MEDICION" in wb_vals.sheetnames else None
+    med  = wb_vals["MEDICION"]     if "MEDICION"     in wb_vals.sheetnames else None
+    cert_vals = wb_vals["CERTIFICADO"] if "CERTIFICADO" in wb_vals.sheetnames else None
 
     def v(ws, coord):
         if ws is None: return ""
@@ -195,24 +196,36 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         "obs":       v(reg, "B27"),
     }
 
+    # Mediciones filas 6-15
     med_data = []
     if med:
         for row_idx in range(6, 16):
             fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
             med_data.append(fila)
 
+    # Trazabilidad filas 103-105
     traz_data = []
     if med:
         for row_idx in range(103, 106):
-            fila = [v(med, f"{col}{row_idx}") for col in ["D","E","F","G"]]
+            fila = [v(med, f"{col}{row_idx}") for col in ["D","E","F"]]
             traz_data.append(fila)
+
+    # Valores calculados internos del CERTIFICADO
+    cert_internos = {}
+    if cert_vals:
+        celdas_int = ["A94","B94","A97","B97","A100","B100","A103","B103",
+                      "A121","B121","A124","B124","A127","B127"]
+        for c in celdas_int:
+            cert_internos[c] = v(cert_vals, c)
 
     wb_vals.close()
 
+    # Abrir para editar
     wb_edit = load_workbook(ruta_excel)
     wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
     wc.sheet_state = "visible"
 
+    # Datos administrativos e instrumento
     escribir_celda(wc, "A7",  r["cert"])
     escribir_celda(wc, "B9",  r["ot"])
     escribir_celda(wc, "D9",  r["fecha_e"])
@@ -230,8 +243,9 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     escribir_celda(wc, "B26", r["fecha_c"])
     escribir_celda(wc, "B31", f"{r['ti']} °C A {r['tf']} °C")
     escribir_celda(wc, "B32", f"{r['hi']} %HR A {r['hf']} %HR")
+    escribir_celda(wc, "A145", r["obs"])
 
-    # Inyectar mediciones con redondeo correcto
+    # Mediciones con redondeo
     for i, fila in enumerate(med_data):
         row = 81 + i
         escribir_celda(wc, f"A{row}", redondear(fila[0], 3))
@@ -239,12 +253,16 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         escribir_celda(wc, f"C{row}", redondear(fila[2], 1))
         escribir_celda(wc, f"D{row}", redondear(fila[3], 4))
 
-    # Inyectar trazabilidad
+    # Trazabilidad
     for i, fila in enumerate(traz_data):
         row = 71 + i
         escribir_celda(wc, f"A{row}", fila[0])
         escribir_celda(wc, f"B{row}", fila[1])
         escribir_celda(wc, f"C{row}", fila[2])
+
+    # Valores calculados internos
+    for coord, val in cert_internos.items():
+        escribir_celda(wc, coord, redondear(val, 2))
 
     # Eliminar otras hojas
     hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
