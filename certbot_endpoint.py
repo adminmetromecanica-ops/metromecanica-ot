@@ -138,15 +138,18 @@ def escribir_celda(ws, coord, valor):
     except Exception:
         pass
 
-def redondear(val, decimales=4):
+def formatear_decimal(val, decimales=2):
+    """Formatea número con coma decimal (estilo peruano/europeo)"""
     try:
+        if val is None or val == "":
+            return ""
         f = float(val)
         r = round(f, decimales)
-        if r == int(r):
-            return int(r)
-        return r
+        if decimales == 0 or r == int(r):
+            return str(int(r))
+        return f"{r:.{decimales}f}".replace(".", ",")
     except Exception:
-        return val
+        return str(val) if val else ""
 
 def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     wb_vals = load_workbook(ruta_excel, data_only=True)
@@ -159,8 +162,8 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     if reg is None:
         reg = wb_vals.worksheets[0]
 
-    med  = wb_vals["MEDICION"]     if "MEDICION"     in wb_vals.sheetnames else None
-    cert_vals = wb_vals["CERTIFICADO"] if "CERTIFICADO" in wb_vals.sheetnames else None
+    med       = wb_vals["MEDICION"]     if "MEDICION"     in wb_vals.sheetnames else None
+    cert_vals = wb_vals["CERTIFICADO"]  if "CERTIFICADO"  in wb_vals.sheetnames else None
 
     def v(ws, coord):
         if ws is None: return ""
@@ -196,7 +199,7 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         "obs":       v(reg, "B27"),
     }
 
-    # Mediciones filas 6-15
+    # Mediciones filas 6-15 con coma decimal
     med_data = []
     if med:
         for row_idx in range(6, 16):
@@ -245,13 +248,13 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     escribir_celda(wc, "B32", f"{r['hi']} %HR A {r['hf']} %HR")
     escribir_celda(wc, "A145", r["obs"])
 
-    # Mediciones con redondeo
+    # Mediciones con coma decimal
     for i, fila in enumerate(med_data):
         row = 81 + i
-        escribir_celda(wc, f"A{row}", redondear(fila[0], 3))
-        escribir_celda(wc, f"B{row}", redondear(fila[1], 3))
-        escribir_celda(wc, f"C{row}", redondear(fila[2], 1))
-        escribir_celda(wc, f"D{row}", redondear(fila[3], 4))
+        escribir_celda(wc, f"A{row}", formatear_decimal(fila[0], 3))
+        escribir_celda(wc, f"B{row}", formatear_decimal(fila[1], 3))
+        escribir_celda(wc, f"C{row}", formatear_decimal(fila[2], 1))
+        escribir_celda(wc, f"D{row}", formatear_decimal(fila[3], 4))
 
     # Trazabilidad
     for i, fila in enumerate(traz_data):
@@ -260,9 +263,9 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         escribir_celda(wc, f"B{row}", fila[1])
         escribir_celda(wc, f"C{row}", fila[2])
 
-    # Valores calculados internos
+    # Valores calculados internos con coma decimal
     for coord, val in cert_internos.items():
-        escribir_celda(wc, coord, redondear(val, 2))
+        escribir_celda(wc, coord, formatear_decimal(val, 2))
 
     # Eliminar otras hojas
     hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
