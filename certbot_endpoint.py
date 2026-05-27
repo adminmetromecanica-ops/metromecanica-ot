@@ -191,6 +191,9 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     wb_edit = load_workbook(ruta_excel)
     wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
 
+    # Hacer visible la hoja CERTIFICADO primero
+    wc.sheet_state = "visible"
+
     escribir_celda(wc, "A2",  r["cert"])
     escribir_celda(wc, "B4",  r["ot"])
     escribir_celda(wc, "D4",  r["fecha_e"])
@@ -214,8 +217,10 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         escribir_celda(wc, f"C{row}", fila[2])
         escribir_celda(wc, f"D{row}", fila[3])
 
+    # Hacer visibles y eliminar hojas que no son CERTIFICADO
     hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
     for h in hojas_borrar:
+        wb_edit[h].sheet_state = "visible"
         del wb_edit[h]
 
     ruta_cert = os.path.join(tmpdir, "certificado_final.xlsx")
