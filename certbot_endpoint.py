@@ -37,6 +37,8 @@ def leer_celda(ws, coord):
         val = ws[coord].value
         if val is None:
             return ""
+        if isinstance(val, datetime.datetime):
+            return val.strftime("%Y-%m-%d")
         s = str(val).strip()
         if s.lower() in ["none", "nan", ""]:
             return ""
@@ -88,15 +90,26 @@ def extraer_datos(ruta_excel):
     except Exception:
         return {"n_certificado": "CERT", "orden_trabajo": "", "solicitante": "", "instrumento": ""}
 
-def construir_nombre(datos, tipo):
-    cert  = datos.get("n_certificado", "CERT")
+def construir_nombre(datos, tipo, nombre_archivo=""):
+    # Leer cert del nombre del archivo primero
+    cert = ""
+    if nombre_archivo:
+        partes = nombre_archivo.upper().replace(".XLSM","").replace(".XLSX","").split("_")
+        for parte in partes:
+            if len(parte) > 5 and '-' in parte and any(
+                parte.startswith(p) for p in ['MLL','MLF','MLE','MLP','MLT','MLM','MLQ','MLC','MLB']
+            ):
+                cert = parte
+                break
+
+    if not cert:
+        cert = datos.get("n_certificado", "CERT")
+
     inst  = datos.get("instrumento", "")
     solic = datos.get("solicitante", "")
     ot    = datos.get("orden_trabajo", "")
     fecha = datetime.date.today().strftime("%Y%m%d")
 
-    for val in [cert, inst, solic, ot]:
-        pass
     if not cert or cert.lower() in ["none","nan",""]: cert = "CERT"
     if not inst or inst.lower() in ["none","nan"]: inst = ""
     if not solic or solic.lower() in ["none","nan"]: solic = ""
@@ -112,12 +125,6 @@ def construir_nombre(datos, tipo):
     return nombre
 
 def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
-    """
-    Lee valores calculados de REGISTRO y MEDICION,
-    los inyecta directamente en CERTIFICADO,
-    y guarda un Excel nuevo listo para convertir a PDF.
-    """
-    # Leer valores calculados (data_only=True)
     wb_vals = load_workbook(ruta_excel, data_only=True)
 
     reg = None
@@ -139,7 +146,6 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         s = str(val).strip()
         return "" if s.lower() in ["none","nan"] else s
 
-    # Leer REGISTRO
     r = {
         "cert":    v(reg, "B8") or v(reg, "B5"),
         "ot":      v(reg, "D5"),
@@ -163,28 +169,17 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         "obs":     v(reg, "B27"),
     }
 
-    # Leer MEDICION — exteriores filas 5-14, interiores 19-28, profundidad 33-42
     med_ext = []
-    med_int = []
-    med_prof = []
     if med:
-        for row_idx in range(5, 15):   # exteriores
+        for row_idx in range(5, 15):
             fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
             med_ext.append(fila)
-        for row_idx in range(19, 29):  # interiores
-            fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
-            med_int.append(fila)
-        for row_idx in range(33, 43):  # profundidad
-            fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
-            med_prof.append(fila)
 
     wb_vals.close()
 
-    # Ahora abrir el workbook con fórmulas para modificar CERTIFICADO
     wb_edit = load_workbook(ruta_excel)
     wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
 
-    # Reemplazar fórmulas con valores directos en CERTIFICADO
     wc["A2"] = r["cert"]
     wc["B4"] = r["ot"]
     wc["D4"] = r["fecha_e"]
@@ -195,14 +190,12 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     wc["B13"] = r["modelo"]
     wc["B14"] = r["serie"]
     wc["B15"] = r["ident"]
-    rango_str = f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}"
-    wc["B16"] = rango_str
+    wc["B16"] = f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}"
     wc["B17"] = f"{r['resol']} {r['unidad']}"
     wc["B19"] = r["fecha_c"]
     wc["B23"] = f"{r['ti']} °C A {r['tf']} °C"
     wc["D23"] = f"{r['hi']} %HR A {r['hf']} %HR"
 
-    # Inyectar mediciones exteriores
     for i, fila in enumerate(med_ext):
         row = 28 + i
         wc[f"A{row}"] = fila[0]
@@ -210,11 +203,6 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
         wc[f"C{row}"] = fila[2]
         wc[f"D{row}"] = fila[3]
 
-    # Guardar solo hoja CERTIFICADO en Excel nuevo
-    from openpyxl import Workbook
-    from copy import copy
-
-    # Eliminar hojas que no son CERTIFICADO
     hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
     for h in hojas_borrar:
         del wb_edit[h]
@@ -245,13 +233,11 @@ def generar_certificado():
         env["LC_ALL"]     = "es_PE.UTF-8"
         env["LC_NUMERIC"] = "es_PE.UTF-8"
 
-        # Resolver fórmulas e inyectar valores en CERTIFICADO
         try:
             ruta_cert_xlsx = resolver_formulas_e_inyectar(ruta_excel, tmpdir)
         except Exception as e:
             return jsonify({"error": f"Error procesando Excel: {str(e)}"}), 500
 
-        # Convertir a PDF
         cmd = [
             "libreoffice", "--headless",
             "--convert-to", "pdf",
@@ -266,7 +252,7 @@ def generar_certificado():
         if not os.path.exists(pdf_generado):
             return jsonify({"error": "PDF no generado"}), 500
 
-        pdf_final = os.path.join(tmpdir, construir_nombre(datos, tipo))
+        pdf_final = os.path.join(tmpdir, construir_nombre(datos, tipo, nombre))
 
         try:
             from pypdf import PdfReader, PdfWriter
