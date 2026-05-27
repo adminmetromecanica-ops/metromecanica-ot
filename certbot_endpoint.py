@@ -4,6 +4,7 @@ import tempfile
 import datetime
 from flask import Blueprint, request, jsonify, send_file
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 
 certbot_bp = Blueprint('certbot', __name__)
 
@@ -91,7 +92,6 @@ def extraer_datos(ruta_excel):
         return {"n_certificado": "CERT", "orden_trabajo": "", "solicitante": "", "instrumento": ""}
 
 def construir_nombre(datos, tipo, nombre_archivo=""):
-    # Leer cert del nombre del archivo primero
     cert = ""
     if nombre_archivo:
         partes = nombre_archivo.upper().replace(".XLSM","").replace(".XLSX","").split("_")
@@ -123,6 +123,17 @@ def construir_nombre(datos, tipo, nombre_archivo=""):
     if len(nombre) > 150:
         nombre = nombre[:146] + ".pdf"
     return nombre
+
+def escribir_celda(ws, coord, valor):
+    cell = ws[coord]
+    if isinstance(cell, MergedCell):
+        for rng in ws.merged_cells.ranges:
+            if coord in rng:
+                master = ws.cell(row=rng.min_row, column=rng.min_col)
+                master.value = valor
+                return
+    else:
+        cell.value = valor
 
 def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     wb_vals = load_workbook(ruta_excel, data_only=True)
@@ -180,28 +191,28 @@ def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
     wb_edit = load_workbook(ruta_excel)
     wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
 
-    wc["A2"] = r["cert"]
-    wc["B4"] = r["ot"]
-    wc["D4"] = r["fecha_e"]
-    wc["B7"] = r["cliente"]
-    wc["B8"] = r["dir"]
-    wc["B11"] = r["instrum"]
-    wc["B12"] = r["marca"]
-    wc["B13"] = r["modelo"]
-    wc["B14"] = r["serie"]
-    wc["B15"] = r["ident"]
-    wc["B16"] = f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}"
-    wc["B17"] = f"{r['resol']} {r['unidad']}"
-    wc["B19"] = r["fecha_c"]
-    wc["B23"] = f"{r['ti']} °C A {r['tf']} °C"
-    wc["D23"] = f"{r['hi']} %HR A {r['hf']} %HR"
+    escribir_celda(wc, "A2",  r["cert"])
+    escribir_celda(wc, "B4",  r["ot"])
+    escribir_celda(wc, "D4",  r["fecha_e"])
+    escribir_celda(wc, "B7",  r["cliente"])
+    escribir_celda(wc, "B8",  r["dir"])
+    escribir_celda(wc, "B11", r["instrum"])
+    escribir_celda(wc, "B12", r["marca"])
+    escribir_celda(wc, "B13", r["modelo"])
+    escribir_celda(wc, "B14", r["serie"])
+    escribir_celda(wc, "B15", r["ident"])
+    escribir_celda(wc, "B16", f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}")
+    escribir_celda(wc, "B17", f"{r['resol']} {r['unidad']}")
+    escribir_celda(wc, "B19", r["fecha_c"])
+    escribir_celda(wc, "B23", f"{r['ti']} °C A {r['tf']} °C")
+    escribir_celda(wc, "D23", f"{r['hi']} %HR A {r['hf']} %HR")
 
     for i, fila in enumerate(med_ext):
         row = 28 + i
-        wc[f"A{row}"] = fila[0]
-        wc[f"B{row}"] = fila[1]
-        wc[f"C{row}"] = fila[2]
-        wc[f"D{row}"] = fila[3]
+        escribir_celda(wc, f"A{row}", fila[0])
+        escribir_celda(wc, f"B{row}", fila[1])
+        escribir_celda(wc, f"C{row}", fila[2])
+        escribir_celda(wc, f"D{row}", fila[3])
 
     hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
     for h in hojas_borrar:
