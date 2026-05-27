@@ -1,9 +1,9 @@
 import os
 import subprocess
 import tempfile
+import datetime
 from flask import Blueprint, request, jsonify, send_file
 from openpyxl import load_workbook
-import datetime
 
 certbot_bp = Blueprint('certbot', __name__)
 
@@ -84,19 +84,9 @@ def extraer_datos(ruta_excel):
         instrum = leer_celda(ws, "B15") or leer_celda(ws, "J12") or leer_celda(ws, "B16") or leer_celda(ws, "B17")
 
         wb.close()
-        return {
-            "n_certificado": n_cert,
-            "orden_trabajo": ot,
-            "solicitante":   solic,
-            "instrumento":   instrum,
-        }
+        return {"n_certificado": n_cert, "orden_trabajo": ot, "solicitante": solic, "instrumento": instrum}
     except Exception:
-        return {
-            "n_certificado": "CERT",
-            "orden_trabajo": "",
-            "solicitante":   "",
-            "instrumento":   "",
-        }
+        return {"n_certificado": "CERT", "orden_trabajo": "", "solicitante": "", "instrumento": ""}
 
 def construir_nombre(datos, tipo):
     cert  = datos.get("n_certificado", "CERT")
@@ -105,23 +95,135 @@ def construir_nombre(datos, tipo):
     ot    = datos.get("orden_trabajo", "")
     fecha = datetime.date.today().strftime("%Y%m%d")
 
-    if not cert or cert.lower() in ["none", "nan", ""]:
-        cert = "CERT"
-    if not inst or inst.lower() in ["none", "nan"]:
-        inst = ""
-    if not solic or solic.lower() in ["none", "nan"]:
-        solic = ""
-    if not ot or ot.lower() in ["none", "nan"]:
-        ot = ""
+    for val in [cert, inst, solic, ot]:
+        pass
+    if not cert or cert.lower() in ["none","nan",""]: cert = "CERT"
+    if not inst or inst.lower() in ["none","nan"]: inst = ""
+    if not solic or solic.lower() in ["none","nan"]: solic = ""
+    if not ot or ot.lower() in ["none","nan"]: ot = ""
 
     nombre = f"{cert}_{inst}_{solic}_{ot}_{fecha}.pdf"
-    for c in ['\\', '/', ':', '*', '?', '"', '<', '>', '|', ' ', '\n', '\r']:
+    for c in ['\\','/',':', '*','?','"','<','>','|',' ','\n','\r']:
         nombre = nombre.replace(c, '_')
     while '__' in nombre:
         nombre = nombre.replace('__', '_')
     if len(nombre) > 150:
         nombre = nombre[:146] + ".pdf"
     return nombre
+
+def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
+    """
+    Lee valores calculados de REGISTRO y MEDICION,
+    los inyecta directamente en CERTIFICADO,
+    y guarda un Excel nuevo listo para convertir a PDF.
+    """
+    # Leer valores calculados (data_only=True)
+    wb_vals = load_workbook(ruta_excel, data_only=True)
+
+    reg = None
+    for h in HOJAS_DATOS:
+        if h in wb_vals.sheetnames:
+            reg = wb_vals[h]
+            break
+    if reg is None:
+        reg = wb_vals.worksheets[0]
+
+    med = wb_vals["MEDICION"] if "MEDICION" in wb_vals.sheetnames else None
+
+    def v(ws, coord):
+        if ws is None: return ""
+        val = ws[coord].value
+        if val is None: return ""
+        if isinstance(val, datetime.datetime):
+            return val.strftime("%Y-%m-%d")
+        s = str(val).strip()
+        return "" if s.lower() in ["none","nan"] else s
+
+    # Leer REGISTRO
+    r = {
+        "cert":    v(reg, "B8") or v(reg, "B5"),
+        "ot":      v(reg, "D5"),
+        "fecha_e": v(reg, "D11"),
+        "cliente": v(reg, "B9"),
+        "dir":     v(reg, "B10"),
+        "fecha_c": v(reg, "B11"),
+        "instrum": v(reg, "B15"),
+        "marca":   v(reg, "D15"),
+        "modelo":  v(reg, "B16"),
+        "serie":   v(reg, "D16"),
+        "ident":   v(reg, "B17"),
+        "rmin":    v(reg, "B18"),
+        "rmax":    v(reg, "D18"),
+        "resol":   v(reg, "B19"),
+        "unidad":  v(reg, "D19"),
+        "ti":      v(reg, "B23"),
+        "tf":      v(reg, "D23"),
+        "hi":      v(reg, "B24"),
+        "hf":      v(reg, "D24"),
+        "obs":     v(reg, "B27"),
+    }
+
+    # Leer MEDICION — exteriores filas 5-14, interiores 19-28, profundidad 33-42
+    med_ext = []
+    med_int = []
+    med_prof = []
+    if med:
+        for row_idx in range(5, 15):   # exteriores
+            fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
+            med_ext.append(fila)
+        for row_idx in range(19, 29):  # interiores
+            fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
+            med_int.append(fila)
+        for row_idx in range(33, 43):  # profundidad
+            fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
+            med_prof.append(fila)
+
+    wb_vals.close()
+
+    # Ahora abrir el workbook con fórmulas para modificar CERTIFICADO
+    wb_edit = load_workbook(ruta_excel)
+    wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
+
+    # Reemplazar fórmulas con valores directos en CERTIFICADO
+    wc["A2"] = r["cert"]
+    wc["B4"] = r["ot"]
+    wc["D4"] = r["fecha_e"]
+    wc["B7"] = r["cliente"]
+    wc["B8"] = r["dir"]
+    wc["B11"] = r["instrum"]
+    wc["B12"] = r["marca"]
+    wc["B13"] = r["modelo"]
+    wc["B14"] = r["serie"]
+    wc["B15"] = r["ident"]
+    rango_str = f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}"
+    wc["B16"] = rango_str
+    wc["B17"] = f"{r['resol']} {r['unidad']}"
+    wc["B19"] = r["fecha_c"]
+    wc["B23"] = f"{r['ti']} °C A {r['tf']} °C"
+    wc["D23"] = f"{r['hi']} %HR A {r['hf']} %HR"
+
+    # Inyectar mediciones exteriores
+    for i, fila in enumerate(med_ext):
+        row = 28 + i
+        wc[f"A{row}"] = fila[0]
+        wc[f"B{row}"] = fila[1]
+        wc[f"C{row}"] = fila[2]
+        wc[f"D{row}"] = fila[3]
+
+    # Guardar solo hoja CERTIFICADO en Excel nuevo
+    from openpyxl import Workbook
+    from copy import copy
+
+    # Eliminar hojas que no son CERTIFICADO
+    hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
+    for h in hojas_borrar:
+        del wb_edit[h]
+
+    ruta_cert = os.path.join(tmpdir, "certificado_final.xlsx")
+    wb_edit.save(ruta_cert)
+    wb_edit.close()
+
+    return ruta_cert
 
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
@@ -143,48 +245,24 @@ def generar_certificado():
         env["LC_ALL"]     = "es_PE.UTF-8"
         env["LC_NUMERIC"] = "es_PE.UTF-8"
 
-        # Convertir SOLO la hoja CERTIFICADO a PDF
-        # Usando LibreOffice con filtro para seleccionar hoja específica
+        # Resolver fórmulas e inyectar valores en CERTIFICADO
         try:
-            from openpyxl import load_workbook as lw
-            wb_temp = lw(ruta_excel)
-            sheetnames = wb_temp.sheetnames
-            wb_temp.close()
+            ruta_cert_xlsx = resolver_formulas_e_inyectar(ruta_excel, tmpdir)
+        except Exception as e:
+            return jsonify({"error": f"Error procesando Excel: {str(e)}"}), 500
 
-            # Crear Excel temporal con SOLO la hoja CERTIFICADO
-            wb_solo = lw(ruta_excel)
-            hojas_borrar = [s for s in wb_solo.sheetnames if s != "CERTIFICADO"]
-            for h in hojas_borrar:
-                del wb_solo[h]
-            
-            ruta_cert_only = os.path.join(tmpdir, "cert_only.xlsx")
-            wb_solo.save(ruta_cert_only)
-            wb_solo.close()
+        # Convertir a PDF
+        cmd = [
+            "libreoffice", "--headless",
+            "--convert-to", "pdf",
+            "--outdir", tmpdir,
+            ruta_cert_xlsx
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
+        if result.returncode != 0:
+            return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
 
-            cmd = [
-                "libreoffice", "--headless",
-                "--convert-to", "pdf",
-                "--outdir", tmpdir,
-                ruta_cert_only
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
-
-            if result.returncode != 0:
-                raise Exception(result.stderr)
-
-            pdf_generado = os.path.join(tmpdir, "cert_only.pdf")
-
-        except Exception:
-            # Fallback: convertir libro completo y tomar última página
-            cmd = [
-                "libreoffice", "--headless",
-                "--convert-to", "pdf",
-                "--outdir", tmpdir,
-                ruta_excel
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
-            pdf_generado = os.path.join(tmpdir, os.path.splitext(nombre)[0] + ".pdf")
-
+        pdf_generado = os.path.join(tmpdir, "certificado_final.pdf")
         if not os.path.exists(pdf_generado):
             return jsonify({"error": "PDF no generado"}), 500
 
