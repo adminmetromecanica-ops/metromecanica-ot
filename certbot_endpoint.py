@@ -9,25 +9,23 @@ from openpyxl.cell.cell import MergedCell
 certbot_bp = Blueprint('certbot', __name__)
 
 def formatear_numero(val):
-    """Convierte números con punto decimal a coma (estilo peruano)."""
+    """Convierte números con punto decimal a coma, redondeado a 3 decimales."""
     if val is None:
         return val
-    if isinstance(val, (int, float)):
-        if isinstance(val, float):
-            # Verificar si tiene decimales
-            if val == int(val):
-                return int(val)
-            # Formatear con coma decimal
-            s = f"{val}"
-            return s.replace(".", ",")
+    if isinstance(val, float):
+        redondeado = round(val, 3)
+        if redondeado == int(redondeado):
+            return int(redondeado)
+        return f"{redondeado:.3f}".replace(".", ",")
+    if isinstance(val, int):
         return val
     if isinstance(val, str):
-        # Si es string con número, convertir punto a coma
         try:
             f = float(val.replace(",", "."))
-            if f == int(f):
-                return str(int(f))
-            return val.replace(".", ",")
+            redondeado = round(f, 3)
+            if redondeado == int(redondeado):
+                return str(int(redondeado))
+            return f"{redondeado:.3f}".replace(".", ",")
         except:
             return val
     return val
@@ -114,7 +112,7 @@ def preparar_certificado(ruta_excel, tmpdir):
     """
     Estrategia universal:
     1. Lee valores calculados de TODAS las hojas
-    2. Inyecta esos valores en CERTIFICADO con coma decimal
+    2. Inyecta esos valores en CERTIFICADO con coma decimal y 3 decimales
     3. Elimina otras hojas
     4. Guarda Excel listo para PDF
     """
@@ -134,13 +132,13 @@ def preparar_certificado(ruta_excel, tmpdir):
     wc = wb_edit[cert_sheet]
     wc.sheet_state = "visible"
 
-    # Inyectar valores calculados con coma decimal
+    # Inyectar valores calculados con coma decimal y redondeo
     cert_vals = hojas_data.get(cert_sheet, {})
     for coord, val in cert_vals.items():
         if val is not None:
             escribir_celda(wc, coord, formatear_numero(val))
 
-    # Limpiar fórmulas restantes
+    # Limpiar formulas restantes
     for row in wc.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -169,7 +167,7 @@ def preparar_certificado(ruta_excel, tmpdir):
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
     if 'file' not in request.files:
-        return jsonify({"error": "No se envió archivo"}), 400
+        return jsonify({"error": "No se envio archivo"}), 400
 
     archivo = request.files['file']
     nombre  = archivo.filename
