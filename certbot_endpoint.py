@@ -23,9 +23,6 @@ HOJA_CERT = {
     "OTROS":       "CERTIFICADO",
 }
 
-HOJAS_DATOS = ["REGISTRO", "DATOS_EQUIPO", "DATOS", "EQUIPO", "INFO", "INFORMACION"]
-CELDAS_CERT = ["B8", "B5", "J7", "B7", "J5"]
-
 def detectar_tipo(nombre):
     nombre = nombre.upper()
     for tipo in HOJA_CERT:
@@ -33,7 +30,7 @@ def detectar_tipo(nombre):
             return tipo
     return None
 
-def leer_celda(ws, coord):
+def leer_celda_val(ws, coord):
     try:
         val = ws[coord].value
         if val is None:
@@ -41,87 +38,140 @@ def leer_celda(ws, coord):
         if isinstance(val, datetime.datetime):
             return val.strftime("%Y-%m-%d")
         s = str(val).strip()
-        if s.lower() in ["none", "nan", ""]:
-            return ""
-        return s
+        return "" if s.lower() in ["none", "nan"] else s
     except Exception:
         return ""
 
-def extraer_datos(ruta_excel):
+def extraer_datos_calibracion(ruta_excel):
+    """
+    Lee datos desde pestaña CALIBRACION celdas B150-B154.
+    Estructura estándar Metromecanica:
+    B150 = N° Certificado
+    B151 = Magnitud
+    B152 = Equipo
+    B153 = Cliente
+    B154 = OT
+    """
     try:
         wb = load_workbook(ruta_excel, read_only=True, data_only=True)
+        
+        # Buscar hoja CALIBRACION
         ws = None
-        for nombre_hoja in HOJAS_DATOS:
-            if nombre_hoja in wb.sheetnames:
+        for nombre_hoja in wb.sheetnames:
+            if nombre_hoja.upper() in ["CALIBRACION", "CALIBRACIÓN"]:
                 ws = wb[nombre_hoja]
                 break
+        
+        if ws is None:
+            # Fallback: buscar en REGISTRO
+            for nombre_hoja in ["REGISTRO", "DATOS_EQUIPO", "DATOS"]:
+                if nombre_hoja in wb.sheetnames:
+                    ws = wb[nombre_hoja]
+                    break
+        
         if ws is None:
             ws = wb.worksheets[0]
 
-        n_cert = ""
-        for celda in CELDAS_CERT:
-            val = leer_celda(ws, celda)
-            if val and len(val) > 3 and '-' in val:
-                n_cert = val
-                break
+        # Leer desde CALIBRACION B150-B154
+        n_cert  = leer_celda_val(ws, "B150")
+        magnitud = leer_celda_val(ws, "B151")
+        equipo  = leer_celda_val(ws, "B152")
+        cliente = leer_celda_val(ws, "B153")
+        ot      = leer_celda_val(ws, "B154")
 
+        # Si no encontró en B150, buscar en celdas anteriores
         if not n_cert:
-            for sheet in wb.worksheets:
-                for row in sheet.iter_rows(min_row=1, max_row=25, values_only=True):
-                    for cell in row:
-                        if cell and isinstance(cell, str):
-                            c = cell.strip()
-                            if len(c) > 5 and '-' in c and any(
-                                c.upper().startswith(p) for p in
-                                ['MLL','MLF','MLE','MLP','MLT','MLM','MLQ','MLC','MLB']
-                            ):
-                                n_cert = c
-                                break
-                    if n_cert:
-                        break
-                if n_cert:
+            for celda in ["B8", "B5", "J7"]:
+                val = leer_celda_val(ws, celda)
+                if val and '-' in val and len(val) > 5:
+                    n_cert = val
                     break
 
-        ot      = leer_celda(ws, "D5") or leer_celda(ws, "J5")
-        solic   = leer_celda(ws, "B9") or leer_celda(ws, "J9")
-        instrum = leer_celda(ws, "B15") or leer_celda(ws, "J12")
-
         wb.close()
-        return {"n_certificado": n_cert, "orden_trabajo": ot, "solicitante": solic, "instrumento": instrum}
-    except Exception:
-        return {"n_certificado": "CERT", "orden_trabajo": "", "solicitante": "", "instrumento": ""}
+        return {
+            "n_certificado": n_cert,
+            "magnitud":      magnitud,
+            "instrumento":   equipo,
+            "solicitante":   cliente,
+            "orden_trabajo": ot,
+        }
+    except Exception as e:
+        return {
+            "n_certificado": "CERT",
+            "magnitud":      "",
+            "instrumento":   "",
+            "solicitante":   "",
+            "orden_trabajo": "",
+        }
 
-def construir_nombre(datos, tipo, nombre_archivo=""):
-    cert = ""
-    if nombre_archivo:
-        partes = nombre_archivo.upper().replace(".XLSM","").replace(".XLSX","").split("_")
-        for parte in partes:
-            if len(parte) > 5 and '-' in parte and any(
-                parte.startswith(p) for p in ['MLL','MLF','MLE','MLP','MLT','MLM','MLQ','MLC','MLB']
-            ):
-                cert = parte
-                break
+def detectar_tipo_desde_datos(datos, nombre_archivo):
+    """Detecta el tipo primero desde CALIBRACION!B151, luego desde nombre."""
+    magnitud = datos.get("magnitud", "").upper()
+    
+    # Mapa de magnitudes a tipos CertBot
+    mapa = {
+        "LONGITUD":    "LONGITUD",
+        "MASA":        "BALANZA",
+        "BALANZA":     "BALANZA",
+        "PESAS":       "PESAS",
+        "PRESION":     "PRESION",
+        "PRESIÓN":     "PRESION",
+        "TEMPERATURA": "TEMPERATURA",
+        "FUERZA":      "FUERZA",
+        "TORQUE":      "FUERZA",
+        "ENERGIA":     "ENERGIA",
+        "ENERGÍA":     "ENERGIA",
+        "ELECTRICA":   "ENERGIA",
+        "ELÉCTRICA":   "ENERGIA",
+        "MEDICO":      "MEDICO",
+        "MÉDICO":      "MEDICO",
+        "QUIMICA":     "QUIMICA",
+        "QUÍMICA":     "QUIMICA",
+        "ENSAYO":      "ENSAYO",
+    }
+    
+    for key, tipo in mapa.items():
+        if key in magnitud:
+            return tipo
+    
+    # Fallback: buscar en nombre del archivo
+    nombre_up = nombre_archivo.upper()
+    for tipo in HOJA_CERT:
+        if tipo in nombre_up:
+            return tipo
+    
+    return "OTROS"
 
-    if not cert:
-        cert = datos.get("n_certificado", "CERT")
+def construir_nombre(datos, nombre_archivo=""):
+    """Construye nombre del PDF desde datos de CALIBRACION."""
+    cert    = datos.get("n_certificado", "CERT")
+    magnitud = datos.get("magnitud", "")
+    inst    = datos.get("instrumento", "")
+    solic   = datos.get("solicitante", "")
+    ot      = datos.get("orden_trabajo", "")
+    fecha   = datetime.date.today().strftime("%Y%m%d")
 
-    inst  = datos.get("instrumento", "")
-    solic = datos.get("solicitante", "")
-    ot    = datos.get("orden_trabajo", "")
-    fecha = datetime.date.today().strftime("%Y%m%d")
-
+    # Limpiar valores
     if not cert or cert.lower() in ["none","nan",""]: cert = "CERT"
+    if not magnitud or magnitud.lower() in ["none","nan"]: magnitud = ""
     if not inst or inst.lower() in ["none","nan"]: inst = ""
     if not solic or solic.lower() in ["none","nan"]: solic = ""
     if not ot or ot.lower() in ["none","nan"]: ot = ""
 
-    nombre = f"{cert}_{inst}_{solic}_{ot}_{fecha}.pdf"
+    # Si no hay magnitud del Excel, sacarla del nombre del archivo
+    if not magnitud:
+        for tipo in HOJA_CERT:
+            if tipo in nombre_archivo.upper():
+                magnitud = tipo
+                break
+
+    nombre = f"{cert}_{magnitud}_{inst}_{solic}_{ot}_{fecha}.pdf"
     for c in ['\\','/',':', '*','?','"','<','>','|',' ','\n','\r']:
         nombre = nombre.replace(c, '_')
     while '__' in nombre:
         nombre = nombre.replace('__', '_')
-    if len(nombre) > 150:
-        nombre = nombre[:146] + ".pdf"
+    if len(nombre) > 180:
+        nombre = nombre[:176] + ".pdf"
     return nombre
 
 def escribir_celda(ws, coord, valor):
@@ -139,7 +189,6 @@ def escribir_celda(ws, coord, valor):
         pass
 
 def formatear_decimal(val, decimales=2):
-    """Formatea número con coma decimal (estilo peruano/europeo)"""
     try:
         if val is None or val == "":
             return ""
@@ -151,174 +200,91 @@ def formatear_decimal(val, decimales=2):
     except Exception:
         return str(val) if val else ""
 
-def resolver_formulas_e_inyectar(ruta_excel, tmpdir):
-    wb_vals = load_workbook(ruta_excel, data_only=True)
+def convertir_excel_a_pdf(ruta_excel, tmpdir, env):
+    """
+    Convierte la hoja CERTIFICADO del Excel a PDF.
+    Estrategia: extraer solo la hoja CERTIFICADO y convertir.
+    """
+    try:
+        wb = load_workbook(ruta_excel)
+        
+        # Verificar que existe hoja CERTIFICADO
+        cert_sheet = None
+        for nombre in wb.sheetnames:
+            if nombre.upper() == "CERTIFICADO":
+                cert_sheet = nombre
+                break
+        
+        if cert_sheet is None:
+            # Usar última hoja si no hay CERTIFICADO
+            cert_sheet = wb.sheetnames[-1]
+        
+        # Hacer visible la hoja CERTIFICADO
+        wb[cert_sheet].sheet_state = "visible"
+        
+        # Eliminar otras hojas
+        hojas_borrar = [s for s in wb.sheetnames if s != cert_sheet]
+        for h in hojas_borrar:
+            try:
+                wb[h].sheet_state = "visible"
+                del wb[h]
+            except Exception:
+                pass
+        
+        ruta_cert = os.path.join(tmpdir, "certificado_final.xlsx")
+        wb.save(ruta_cert)
+        wb.close()
 
-    reg = None
-    for h in HOJAS_DATOS:
-        if h in wb_vals.sheetnames:
-            reg = wb_vals[h]
-            break
-    if reg is None:
-        reg = wb_vals.worksheets[0]
-
-    med       = wb_vals["MEDICION"]     if "MEDICION"     in wb_vals.sheetnames else None
-    cert_vals = wb_vals["CERTIFICADO"]  if "CERTIFICADO"  in wb_vals.sheetnames else None
-
-    def v(ws, coord):
-        if ws is None: return ""
-        val = ws[coord].value
-        if val is None: return ""
-        if isinstance(val, datetime.datetime):
-            return val.strftime("%Y-%m-%d")
-        s = str(val).strip()
-        return "" if s.lower() in ["none","nan"] else s
-
-    r = {
-        "cert":      v(reg, "B8"),
-        "ot":        v(reg, "D5"),
-        "fecha_e":   v(reg, "D11"),
-        "fecha_c":   v(reg, "D12"),
-        "cliente":   v(reg, "B9"),
-        "dir":       v(reg, "B10"),
-        "instrum":   v(reg, "B15"),
-        "marca":     v(reg, "D15"),
-        "modelo":    v(reg, "B16"),
-        "serie":     v(reg, "D16") or v(reg, "B5"),
-        "ident":     v(reg, "B17"),
-        "rmin":      v(reg, "B18"),
-        "rmax":      v(reg, "D18"),
-        "resol":     v(reg, "B19"),
-        "unidad":    v(reg, "D19"),
-        "tipo_eq":   v(reg, "B20"),
-        "ubicacion": v(reg, "D20"),
-        "ti":        v(reg, "B23"),
-        "tf":        v(reg, "D23"),
-        "hi":        v(reg, "B24"),
-        "hf":        v(reg, "D24"),
-        "obs":       v(reg, "B27"),
-    }
-
-    # Mediciones filas 6-15 con coma decimal
-    med_data = []
-    if med:
-        for row_idx in range(6, 16):
-            fila = [v(med, f"{col}{row_idx}") for col in ["B","C","D","E","F"]]
-            med_data.append(fila)
-
-    # Trazabilidad filas 103-105
-    traz_data = []
-    if med:
-        for row_idx in range(103, 106):
-            fila = [v(med, f"{col}{row_idx}") for col in ["D","E","F"]]
-            traz_data.append(fila)
-
-    # Valores calculados internos del CERTIFICADO
-    cert_internos = {}
-    if cert_vals:
-        celdas_int = ["A94","B94","A97","B97","A100","B100","A103","B103",
-                      "A121","B121","A124","B124","A127","B127"]
-        for c in celdas_int:
-            cert_internos[c] = v(cert_vals, c)
-
-    wb_vals.close()
-
-    # Abrir para editar
-    wb_edit = load_workbook(ruta_excel)
-    wc = wb_edit["CERTIFICADO"] if "CERTIFICADO" in wb_edit.sheetnames else wb_edit.worksheets[-1]
-    wc.sheet_state = "visible"
-
-    # Datos administrativos e instrumento
-    escribir_celda(wc, "A7",  r["cert"])
-    escribir_celda(wc, "B9",  r["ot"])
-    escribir_celda(wc, "D9",  r["fecha_e"])
-    escribir_celda(wc, "B12", r["cliente"])
-    escribir_celda(wc, "B13", r["dir"])
-    escribir_celda(wc, "B16", r["instrum"])
-    escribir_celda(wc, "B17", r["marca"])
-    escribir_celda(wc, "B18", r["modelo"])
-    escribir_celda(wc, "B19", r["serie"])
-    escribir_celda(wc, "B20", r["ident"])
-    escribir_celda(wc, "B21", f"{r['rmin']} {r['unidad']} a {r['rmax']} {r['unidad']}")
-    escribir_celda(wc, "B22", f"{r['resol']} {r['unidad']}")
-    escribir_celda(wc, "B23", r["tipo_eq"])
-    escribir_celda(wc, "A24", r["ubicacion"])
-    escribir_celda(wc, "B26", r["fecha_c"])
-    escribir_celda(wc, "B31", f"{r['ti']} °C A {r['tf']} °C")
-    escribir_celda(wc, "B32", f"{r['hi']} %HR A {r['hf']} %HR")
-    escribir_celda(wc, "A145", r["obs"])
-
-    # Mediciones con coma decimal
-    for i, fila in enumerate(med_data):
-        row = 81 + i
-        escribir_celda(wc, f"A{row}", formatear_decimal(fila[0], 3))
-        escribir_celda(wc, f"B{row}", formatear_decimal(fila[1], 3))
-        escribir_celda(wc, f"C{row}", formatear_decimal(fila[2], 1))
-        escribir_celda(wc, f"D{row}", formatear_decimal(fila[3], 4))
-
-    # Trazabilidad
-    for i, fila in enumerate(traz_data):
-        row = 71 + i
-        escribir_celda(wc, f"A{row}", fila[0])
-        escribir_celda(wc, f"B{row}", fila[1])
-        escribir_celda(wc, f"C{row}", fila[2])
-
-    # Valores calculados internos con coma decimal
-    for coord, val in cert_internos.items():
-        escribir_celda(wc, coord, formatear_decimal(val, 2))
-
-    # Eliminar otras hojas
-    hojas_borrar = [s for s in wb_edit.sheetnames if s != "CERTIFICADO"]
-    for h in hojas_borrar:
-        wb_edit[h].sheet_state = "visible"
-        del wb_edit[h]
-
-    ruta_cert = os.path.join(tmpdir, "certificado_final.xlsx")
-    wb_edit.save(ruta_cert)
-    wb_edit.close()
-
-    return ruta_cert
+        # Convertir a PDF con LibreOffice
+        cmd = [
+            "libreoffice", "--headless",
+            "--convert-to", "pdf",
+            "--outdir", tmpdir,
+            ruta_cert
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
+        
+        if result.returncode != 0:
+            return None, result.stderr
+        
+        pdf_path = os.path.join(tmpdir, "certificado_final.pdf")
+        return pdf_path if os.path.exists(pdf_path) else None, None
+        
+    except Exception as e:
+        return None, str(e)
 
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
     if 'file' not in request.files:
         return jsonify({"error": "No se envió archivo"}), 400
+    
     archivo = request.files['file']
     nombre  = archivo.filename
-    tipo = detectar_tipo(nombre)
-    if tipo is None:
-        return jsonify({"error": f"Tipo no reconocido: {nombre}"}), 400
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ruta_excel = os.path.join(tmpdir, nombre)
         archivo.save(ruta_excel)
-        datos = extraer_datos(ruta_excel)
+
+        # Extraer datos desde pestaña CALIBRACION
+        datos = extraer_datos_calibracion(ruta_excel)
+        
+        # Detectar tipo de magnitud
+        tipo = detectar_tipo_desde_datos(datos, nombre)
 
         env = os.environ.copy()
         env["LANG"]       = "es_PE.UTF-8"
         env["LC_ALL"]     = "es_PE.UTF-8"
         env["LC_NUMERIC"] = "es_PE.UTF-8"
 
-        try:
-            ruta_cert_xlsx = resolver_formulas_e_inyectar(ruta_excel, tmpdir)
-        except Exception as e:
-            return jsonify({"error": f"Error procesando Excel: {str(e)}"}), 500
+        # Convertir hoja CERTIFICADO a PDF
+        pdf_generado, error = convertir_excel_a_pdf(ruta_excel, tmpdir, env)
+        
+        if pdf_generado is None:
+            return jsonify({"error": "Error generando PDF", "detalle": error}), 500
 
-        cmd = [
-            "libreoffice", "--headless",
-            "--convert-to", "pdf",
-            "--outdir", tmpdir,
-            ruta_cert_xlsx
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
-        if result.returncode != 0:
-            return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
-
-        pdf_generado = os.path.join(tmpdir, "certificado_final.pdf")
-        if not os.path.exists(pdf_generado):
-            return jsonify({"error": "PDF no generado"}), 500
-
-        pdf_final = os.path.join(tmpdir, construir_nombre(datos, tipo, nombre))
+        # Nombrar el PDF final
+        nombre_pdf = construir_nombre(datos, nombre)
+        pdf_final  = os.path.join(tmpdir, nombre_pdf)
 
         try:
             from pypdf import PdfReader, PdfWriter
