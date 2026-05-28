@@ -8,6 +8,30 @@ from openpyxl.cell.cell import MergedCell
 
 certbot_bp = Blueprint('certbot', __name__)
 
+def formatear_numero(val):
+    """Convierte números con punto decimal a coma (estilo peruano)."""
+    if val is None:
+        return val
+    if isinstance(val, (int, float)):
+        if isinstance(val, float):
+            # Verificar si tiene decimales
+            if val == int(val):
+                return int(val)
+            # Formatear con coma decimal
+            s = f"{val}"
+            return s.replace(".", ",")
+        return val
+    if isinstance(val, str):
+        # Si es string con número, convertir punto a coma
+        try:
+            f = float(val.replace(",", "."))
+            if f == int(f):
+                return str(int(f))
+            return val.replace(".", ",")
+        except:
+            return val
+    return val
+
 def leer_todos_valores(ruta_excel):
     """Lee valores calculados de TODAS las hojas del Excel."""
     wb = load_workbook(ruta_excel, read_only=True, data_only=True)
@@ -31,14 +55,13 @@ def leer_todos_valores(ruta_excel):
 def extraer_datos_nombre(hojas_data, nombre_archivo):
     """Extrae datos para nombrar el PDF desde pestaña CALIBRACION."""
     cal = hojas_data.get("CALIBRACION", {})
-    
+
     n_cert   = str(cal.get("B150", "") or "").strip()
     magnitud = str(cal.get("B151", "") or "").strip()
     equipo   = str(cal.get("B152", "") or "").strip()
     cliente  = str(cal.get("B153", "") or "").strip()
     ot       = str(cal.get("B154", "") or "").strip()
 
-    # Fallback desde nombre del archivo
     if not n_cert:
         partes = nombre_archivo.upper().replace(".XLSM","").replace(".XLSX","").split("_")
         for parte in partes:
@@ -48,15 +71,21 @@ def extraer_datos_nombre(hojas_data, nombre_archivo):
                 n_cert = parte
                 break
 
-    return {"n_certificado": n_cert, "magnitud": magnitud, "instrumento": equipo, "solicitante": cliente, "orden_trabajo": ot}
+    return {
+        "n_certificado": n_cert,
+        "magnitud":      magnitud,
+        "instrumento":   equipo,
+        "solicitante":   cliente,
+        "orden_trabajo": ot,
+    }
 
 def construir_nombre(datos, nombre_archivo=""):
-    cert    = datos.get("n_certificado", "CERT") or "CERT"
+    cert     = datos.get("n_certificado", "CERT") or "CERT"
     magnitud = datos.get("magnitud", "") or ""
-    inst    = datos.get("instrumento", "") or ""
-    solic   = datos.get("solicitante", "") or ""
-    ot      = datos.get("orden_trabajo", "") or ""
-    fecha   = datetime.date.today().strftime("%Y%m%d")
+    inst     = datos.get("instrumento", "") or ""
+    solic    = datos.get("solicitante", "") or ""
+    ot       = datos.get("orden_trabajo", "") or ""
+    fecha    = datetime.date.today().strftime("%Y%m%d")
 
     nombre = f"{cert}_{magnitud}_{inst}_{solic}_{ot}_{fecha}.pdf"
     for c in ['\\','/',':', '*','?','"','<','>','|',' ','\n','\r']:
@@ -85,16 +114,14 @@ def preparar_certificado(ruta_excel, tmpdir):
     """
     Estrategia universal:
     1. Lee valores calculados de TODAS las hojas
-    2. Inyecta esos valores en la hoja CERTIFICADO
-    3. Elimina las otras hojas
+    2. Inyecta esos valores en CERTIFICADO con coma decimal
+    3. Elimina otras hojas
     4. Guarda Excel listo para PDF
     """
-    # Paso 1: Leer todos los valores calculados
     hojas_data = leer_todos_valores(ruta_excel)
-    
-    # Paso 2: Abrir para editar
+
     wb_edit = load_workbook(ruta_excel, data_only=False)
-    
+
     # Encontrar hoja CERTIFICADO
     cert_sheet = None
     for nombre in wb_edit.sheetnames:
@@ -103,17 +130,17 @@ def preparar_certificado(ruta_excel, tmpdir):
             break
     if cert_sheet is None:
         cert_sheet = wb_edit.sheetnames[-1]
-    
+
     wc = wb_edit[cert_sheet]
     wc.sheet_state = "visible"
-    
-    # Paso 3: Inyectar valores calculados en CERTIFICADO
+
+    # Inyectar valores calculados con coma decimal
     cert_vals = hojas_data.get(cert_sheet, {})
     for coord, val in cert_vals.items():
         if val is not None:
-            escribir_celda(wc, coord, val)
-    
-    # Paso 4: Limpiar fórmulas restantes
+            escribir_celda(wc, coord, formatear_numero(val))
+
+    # Limpiar fórmulas restantes
     for row in wc.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -123,8 +150,8 @@ def preparar_certificado(ruta_excel, tmpdir):
                     cell.value = None
             except Exception:
                 pass
-    
-    # Paso 5: Eliminar otras hojas
+
+    # Eliminar otras hojas
     hojas_borrar = [s for s in wb_edit.sheetnames if s != cert_sheet]
     for h in hojas_borrar:
         try:
@@ -132,18 +159,18 @@ def preparar_certificado(ruta_excel, tmpdir):
             del wb_edit[h]
         except Exception:
             pass
-    
+
     ruta_cert = os.path.join(tmpdir, "certificado_final.xlsx")
     wb_edit.save(ruta_cert)
     wb_edit.close()
-    
+
     return ruta_cert
 
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
     if 'file' not in request.files:
         return jsonify({"error": "No se envió archivo"}), 400
-    
+
     archivo = request.files['file']
     nombre  = archivo.filename
 
@@ -151,7 +178,6 @@ def generar_certificado():
         ruta_excel = os.path.join(tmpdir, nombre)
         archivo.save(ruta_excel)
 
-        # Leer datos para nombre del PDF
         hojas_data = leer_todos_valores(ruta_excel)
         datos = extraer_datos_nombre(hojas_data, nombre)
 
@@ -160,13 +186,11 @@ def generar_certificado():
         env["LC_ALL"]     = "es_PE.UTF-8"
         env["LC_NUMERIC"] = "es_PE.UTF-8"
 
-        # Preparar Excel con valores inyectados
         try:
             ruta_cert_xlsx = preparar_certificado(ruta_excel, tmpdir)
         except Exception as e:
             return jsonify({"error": f"Error preparando certificado: {str(e)}"}), 500
 
-        # Convertir a PDF
         cmd = [
             "libreoffice", "--headless",
             "--convert-to", "pdf",
@@ -181,7 +205,6 @@ def generar_certificado():
         if not os.path.exists(pdf_generado):
             return jsonify({"error": "PDF no generado"}), 500
 
-        # Nombrar PDF final
         pdf_final = os.path.join(tmpdir, construir_nombre(datos, nombre))
 
         try:
