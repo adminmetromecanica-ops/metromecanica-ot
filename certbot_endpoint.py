@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import tempfile
 import datetime
@@ -9,13 +10,132 @@ from openpyxl.cell.cell import MergedCell
 certbot_bp = Blueprint('certbot', __name__)
 
 
+def fmt_val(val, number_format=None):
+    """
+    Convierte un valor numérico al formato peruano (coma decimal)
+    respetando el number_format de la celda.
+    No toca strings, fechas, ni booleanos.
+    """
+    if val is None or isinstance(val, bool) or isinstance(val, str):
+        return val
+
+    if isinstance(val, datetime.datetime):
+        return val.strftime("%Y-%m-%d")
+
+    if isinstance(val, (int, float)):
+        if not number_format or number_format in ("General", "@"):
+            # Sin formato: limpiar ruido flotante pero no forzar decimales
+            if isinstance(val, float) and val == int(val):
+                return int(val)
+            return val
+
+        # Contar decimales del formato Excel (ej: "0.000" → 3)
+        m = re.search(r'\.([0#]+)', number_format)
+        decimales = len(m.group(1)) if m else 0
+
+        redondeado = round(float(val), decimales)
+
+        if decimales == 0:
+            return int(redondeado)
+
+        s = f"{redondeado:.{decimales}f}"
+        return s.replace(".", ",")
+
+    return val
+
+
+def leer_certificado(ruta_excel):
+    """
+    Lee la hoja CERTIFICADO con data_only=True (valores calculados)
+    Y con data_only=False (para leer number_format).
+    Retorna dict: { coord: valor_formateado }
+    """
+    # Paso 1: leer valores calculados
+    wb_vals = load_workbook(ruta_excel, read_only=False, data_only=True)
+    cert_name = next(
+        (s for s in wb_vals.sheetnames if s.upper() == "CERTIFICADO"),
+        wb_vals.sheetnames[-1]
+    )
+    ws_vals = wb_vals[cert_name]
+    valores = {}
+    for row in ws_vals.iter_rows():
+        for cell in row:
+            if isinstance(cell, MergedCell):
+                continue
+            if cell.value is not None:
+                valores[cell.coordinate] = (cell.value, cell.number_format)
+    wb_vals.close()
+
+    # Paso 2: formatear cada valor
+    resultado = {}
+    for coord, (val, fmt) in valores.items():
+        resultado[coord] = fmt_val(val, fmt)
+
+    return resultado, cert_name
+
+
+def preparar_para_pdf(ruta_excel, tmpdir):
+    """
+    1. Lee todos los valores calculados de CERTIFICADO (con su formato)
+    2. Abre el workbook en modo edición
+    3. Inyecta los valores estáticos (sin fórmulas) en CERTIFICADO
+    4. Elimina todas las demás hojas
+    5. Guarda
+    """
+    valores_cert, cert_name = leer_certificado(ruta_excel)
+
+    wb = load_workbook(ruta_excel, data_only=False)
+    ws = wb[cert_name]
+    ws.sheet_state = "visible"
+
+    # Inyectar valores estáticos
+    for coord, val in valores_cert.items():
+        try:
+            cell = ws[coord]
+            if isinstance(cell, MergedCell):
+                # Escribir en la celda master del rango fusionado
+                for rng in ws.merged_cells.ranges:
+                    if coord in rng:
+                        master = ws.cell(row=rng.min_row, column=rng.min_col)
+                        master.value = val
+                        break
+            else:
+                cell.value = val
+        except Exception:
+            pass
+
+    # Limpiar cualquier fórmula residual
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell, MergedCell):
+                continue
+            try:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    cell.value = None
+            except Exception:
+                pass
+
+    # Eliminar todas las demás hojas
+    for nombre in [s for s in wb.sheetnames if s != cert_name]:
+        try:
+            wb[nombre].sheet_state = "visible"
+            del wb[nombre]
+        except Exception:
+            pass
+
+    ruta_out = os.path.join(tmpdir, "certificado_final.xlsx")
+    wb.save(ruta_out)
+    wb.close()
+    return ruta_out
+
+
 def construir_nombre(ruta_excel, nombre_archivo):
-    """Construye el nombre del PDF desde pestaña CALIBRACION o desde el nombre del archivo."""
+    """Construye el nombre del PDF desde pestaña CALIBRACION o nombre del archivo."""
+    n_cert = magnitud = equipo = cliente = ot = ""
     try:
         wb = load_workbook(ruta_excel, read_only=True, data_only=True)
-        cal = wb["CALIBRACION"] if "CALIBRACION" in wb.sheetnames else None
-        n_cert = magnitud = equipo = cliente = ot = ""
-        if cal:
+        if "CALIBRACION" in wb.sheetnames:
+            cal = wb["CALIBRACION"]
             def g(coord):
                 v = cal[coord].value
                 return str(v).strip() if v else ""
@@ -26,7 +146,7 @@ def construir_nombre(ruta_excel, nombre_archivo):
             ot       = g("B154")
         wb.close()
     except Exception:
-        n_cert = magnitud = equipo = cliente = ot = ""
+        pass
 
     if not n_cert:
         for parte in nombre_archivo.upper().replace(".XLSM","").replace(".XLSX","").split("_"):
@@ -42,36 +162,7 @@ def construir_nombre(ruta_excel, nombre_archivo):
         nombre = nombre.replace(c, '_')
     while '__' in nombre:
         nombre = nombre.replace('__', '_')
-    return nombre[:180] if len(nombre) > 180 else nombre
-
-
-def preparar_para_pdf(ruta_excel, tmpdir):
-    """
-    Deja solo la hoja CERTIFICADO visible y guarda.
-    No toca ningún valor — LibreOffice imprime tal cual.
-    """
-    wb = load_workbook(ruta_excel, data_only=False)
-
-    # Identificar hoja CERTIFICADO
-    cert_sheet = next(
-        (s for s in wb.sheetnames if s.upper() == "CERTIFICADO"),
-        wb.sheetnames[-1]
-    )
-
-    # Ocultar todas las demás hojas
-    for nombre in wb.sheetnames:
-        if nombre == cert_sheet:
-            wb[nombre].sheet_state = "visible"
-        else:
-            try:
-                wb[nombre].sheet_state = "hidden"
-            except Exception:
-                pass
-
-    ruta_out = os.path.join(tmpdir, "certificado_final.xlsx")
-    wb.save(ruta_out)
-    wb.close()
-    return ruta_out
+    return nombre[:180]
 
 
 @certbot_bp.route('/generar-certificado', methods=['POST'])
