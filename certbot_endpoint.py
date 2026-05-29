@@ -8,27 +8,134 @@ from openpyxl.cell.cell import MergedCell
 
 certbot_bp = Blueprint('certbot', __name__)
 
-def formatear_numero(val):
-    """Convierte números con punto decimal a coma, redondeado a 2 decimales."""
+def formatear_numero(val, decimales=None):
+    """
+    Convierte números al estilo peruano (coma decimal), con redondeo inteligente.
+    - decimales=None  → detecta automáticamente los decimales significativos (máx 6)
+    - decimales=N     → fuerza N decimales fijos
+    """
     if val is None:
         return val
-    if isinstance(val, float):
-        redondeado = round(val, 2)
-        if redondeado == int(redondeado):
-            return int(redondeado)
-        return f"{redondeado:.2f}".replace(".", ",")
+
+    if isinstance(val, bool):
+        return val  # booleanos primero, antes de int
+
     if isinstance(val, int):
         return val
+
+    if isinstance(val, float):
+        # Redondear para eliminar ruido de punto flotante
+        # Determinar cuántos decimales reales tiene el valor
+        if decimales is not None:
+            redondeado = round(val, decimales)
+        else:
+            # Detectar decimales significativos: probar desde 6 hacia abajo
+            redondeado = None
+            for d in range(6, -1, -1):
+                r = round(val, d)
+                if abs(r - val) < 1e-9:
+                    redondeado = r
+                    decimales_uso = d
+                    break
+            if redondeado is None:
+                redondeado = round(val, 6)
+                decimales_uso = 6
+            decimales = decimales_uso
+
+        # Si el valor redondeado es entero exacto, devolver como entero
+        if decimales == 0 or redondeado == int(redondeado):
+            return int(redondeado)
+
+        # Formatear con los decimales correctos y reemplazar punto por coma
+        s = f"{redondeado:.{decimales}f}"
+        return s.replace(".", ",")
+
     if isinstance(val, str):
         try:
             f = float(val.replace(",", "."))
-            redondeado = round(f, 2)
-            if redondeado == int(redondeado):
-                return str(int(redondeado))
-            return f"{redondeado:.2f}".replace(".", ",")
-        except:
+            return formatear_numero(f)
+        except Exception:
             return val
+
     return val
+
+# ---------------------------------------------------------------------------
+# Mapa de precisión fija para celdas de resultados del certificado
+# Se construye dinámicamente por _construir_mapa_precision()
+# ---------------------------------------------------------------------------
+PRECISION_CELDAS = {}
+
+def _construir_mapa_precision(hojas_data, cert_sheet):
+    """
+    Detecta automáticamente las columnas de la tabla de resultados
+    buscando los encabezados en CERTIFICADO y aplica precisión fija.
+      Indicación (mm)  → 3 decimales
+      VCV (mm)         → 3 decimales
+      Error (mm)       → 3 decimales
+      Error (µm)       → 2 decimales
+      fmax / U         → 2 decimales
+    """
+    global PRECISION_CELDAS
+    PRECISION_CELDAS = {}
+
+    datos_cert = hojas_data.get(cert_sheet, {})
+    col_indicacion = col_vcv = col_error_mm = col_error_um = None
+    fila_inicio = None
+
+    for coord, val in datos_cert.items():
+        if not isinstance(val, str):
+            continue
+        vl = val.lower()
+        col = ''.join(c for c in coord if c.isalpha())
+        try:
+            fila = int(''.join(c for c in coord if c.isdigit()))
+        except ValueError:
+            continue
+
+        if "indicaci" in vl and "mm" in vl and col_indicacion is None:
+            col_indicacion = col
+            fila_inicio = fila + 1
+        elif ("convencionalmente" in vl or "vcv" in vl or "verdadero" in vl) and "mm" in vl and col_vcv is None:
+            col_vcv = col
+        elif "error" in vl and "mm" in vl and col_error_mm is None:
+            col_error_mm = col
+        elif "error" in vl and ("\u00b5m" in vl or "um" in vl) and col_error_um is None:
+            col_error_um = col
+
+    if fila_inicio:
+        for fila in range(fila_inicio, fila_inicio + 12):
+            if col_indicacion:
+                PRECISION_CELDAS[f"{col_indicacion}{fila}"] = 3
+            if col_vcv:
+                PRECISION_CELDAS[f"{col_vcv}{fila}"] = 3
+            if col_error_mm:
+                PRECISION_CELDAS[f"{col_error_mm}{fila}"] = 3
+            if col_error_um:
+                PRECISION_CELDAS[f"{col_error_um}{fila}"] = 2
+
+    # fmax y U: celdas numéricas en filas que mencionan esas palabras clave
+    for coord, val in datos_cert.items():
+        if isinstance(val, str) and ("fmax" in val.lower() or "incertidumbre" in val.lower()):
+            col = ''.join(c for c in coord if c.isalpha())
+            try:
+                fila = int(''.join(c for c in coord if c.isdigit()))
+            except ValueError:
+                continue
+            # El valor numérico suele estar algunas columnas a la derecha
+            for offset in range(1, 10):
+                col_val = chr(ord(col[-1]) + offset) if len(col) == 1 else None
+                if col_val:
+                    cand = f"{col_val}{fila}"
+                    if cand in datos_cert and isinstance(datos_cert[cand], (int, float)):
+                        PRECISION_CELDAS[cand] = 2
+
+
+def formatear_numero_celda(coord, val):
+    """Formatea un valor usando la precisión mapeada para esa coordenada."""
+    if coord in PRECISION_CELDAS:
+        return formatear_numero(val, decimales=PRECISION_CELDAS[coord])
+    return formatear_numero(val)
+
 
 def leer_todos_valores(ruta_excel):
     """Lee valores calculados de TODAS las hojas del Excel."""
@@ -109,10 +216,19 @@ def escribir_celda(ws, coord, valor):
         pass
 
 def preparar_certificado(ruta_excel, tmpdir):
+    """
+    Estrategia universal:
+    1. Lee valores calculados de TODAS las hojas
+    2. Construye mapa de precision segun encabezados de la tabla de resultados
+    3. Inyecta esos valores en CERTIFICADO con coma decimal y precision correcta
+    4. Elimina otras hojas
+    5. Guarda Excel listo para PDF
+    """
     hojas_data = leer_todos_valores(ruta_excel)
 
     wb_edit = load_workbook(ruta_excel, data_only=False)
 
+    # Encontrar hoja CERTIFICADO
     cert_sheet = None
     for nombre in wb_edit.sheetnames:
         if nombre.upper() == "CERTIFICADO":
@@ -121,14 +237,19 @@ def preparar_certificado(ruta_excel, tmpdir):
     if cert_sheet is None:
         cert_sheet = wb_edit.sheetnames[-1]
 
+    # Construir mapa de precision ANTES de inyectar
+    _construir_mapa_precision(hojas_data, cert_sheet)
+
     wc = wb_edit[cert_sheet]
     wc.sheet_state = "visible"
 
+    # Inyectar valores calculados con coma decimal y precision por celda
     cert_vals = hojas_data.get(cert_sheet, {})
     for coord, val in cert_vals.items():
         if val is not None:
-            escribir_celda(wc, coord, formatear_numero(val))
+            escribir_celda(wc, coord, formatear_numero_celda(coord, val))
 
+    # Limpiar fórmulas restantes
     for row in wc.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -139,6 +260,7 @@ def preparar_certificado(ruta_excel, tmpdir):
             except Exception:
                 pass
 
+    # Eliminar otras hojas
     hojas_borrar = [s for s in wb_edit.sheetnames if s != cert_sheet]
     for h in hojas_borrar:
         try:
@@ -156,7 +278,7 @@ def preparar_certificado(ruta_excel, tmpdir):
 @certbot_bp.route('/generar-certificado', methods=['POST'])
 def generar_certificado():
     if 'file' not in request.files:
-        return jsonify({"error": "No se envio archivo"}), 400
+        return jsonify({"error": "No se envió archivo"}), 400
 
     archivo = request.files['file']
     nombre  = archivo.filename
