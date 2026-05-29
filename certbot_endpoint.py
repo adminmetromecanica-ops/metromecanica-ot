@@ -9,23 +9,23 @@ from openpyxl.cell.cell import MergedCell
 certbot_bp = Blueprint('certbot', __name__)
 
 def formatear_numero(val):
-    """Convierte números con punto decimal a coma, redondeado a 3 decimales."""
+    """Convierte números con punto decimal a coma, redondeado a 2 decimales."""
     if val is None:
         return val
     if isinstance(val, float):
-        redondeado = round(val, 3)
+        redondeado = round(val, 2)
         if redondeado == int(redondeado):
             return int(redondeado)
-        return f"{redondeado:.3f}".replace(".", ",")
+        return f"{redondeado:.2f}".replace(".", ",")
     if isinstance(val, int):
         return val
     if isinstance(val, str):
         try:
             f = float(val.replace(",", "."))
-            redondeado = round(f, 3)
+            redondeado = round(f, 2)
             if redondeado == int(redondeado):
                 return str(int(redondeado))
-            return f"{redondeado:.3f}".replace(".", ",")
+            return f"{redondeado:.2f}".replace(".", ",")
         except:
             return val
     return val
@@ -109,18 +109,10 @@ def escribir_celda(ws, coord, valor):
         pass
 
 def preparar_certificado(ruta_excel, tmpdir):
-    """
-    Estrategia universal:
-    1. Lee valores calculados de TODAS las hojas
-    2. Inyecta esos valores en CERTIFICADO con coma decimal y 3 decimales
-    3. Elimina otras hojas
-    4. Guarda Excel listo para PDF
-    """
     hojas_data = leer_todos_valores(ruta_excel)
 
     wb_edit = load_workbook(ruta_excel, data_only=False)
 
-    # Encontrar hoja CERTIFICADO
     cert_sheet = None
     for nombre in wb_edit.sheetnames:
         if nombre.upper() == "CERTIFICADO":
@@ -132,13 +124,11 @@ def preparar_certificado(ruta_excel, tmpdir):
     wc = wb_edit[cert_sheet]
     wc.sheet_state = "visible"
 
-    # Inyectar valores calculados con coma decimal y redondeo
     cert_vals = hojas_data.get(cert_sheet, {})
     for coord, val in cert_vals.items():
         if val is not None:
             escribir_celda(wc, coord, formatear_numero(val))
 
-    # Limpiar formulas restantes
     for row in wc.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -149,7 +139,6 @@ def preparar_certificado(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # Eliminar otras hojas
     hojas_borrar = [s for s in wb_edit.sheetnames if s != cert_sheet]
     for h in hojas_borrar:
         try:
