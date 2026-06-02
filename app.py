@@ -28,6 +28,9 @@ app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 from certbot_endpoint import certbot_bp
 app.register_blueprint(certbot_bp)
 
+from firmar_endpoint import firmar_bp
+app.register_blueprint(firmar_bp)
+
 HTML = r"""<!DOCTYPE html>
 <html lang="es">
 <head>
