@@ -30,4 +30,4 @@ RUN mkdir -p ordenes_generadas
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "LANG=es_PE.UTF-8 LC_ALL=es_PE.UTF-8 gunicorn --bind 0.0.0.0:10000 app:app"]
+CMD ["sh", "-c", "LANG=es_PE.UTF-8 LC_ALL=es_PE.UTF-8 gunicorn --bind 0.0.0.0:10000 --timeout 120 --limit-request-line 0 --limit-request-field_size 0 app:app"]
