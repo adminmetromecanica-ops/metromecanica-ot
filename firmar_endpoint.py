@@ -51,7 +51,7 @@ def aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes):
 
 @firmar_bp.route('/firmar-lote', methods=['POST'])
 def firmar_lote():
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True)
     if not data or "documentos" not in data:
         return jsonify({"error": "Body inválido. Se esperan 'documentos'"}), 400
 
