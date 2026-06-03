@@ -47,7 +47,7 @@ function procesarCertificados() {
   // Construir payload para Railway
   const documentos = lote.map(archivo => ({
     nombre:    archivo.getName(),
-    contenido: Utilities.base64Encode(archivo.getBlob().getBytes())
+    contenido: Utilities.base64Encode(archivo.getBlob().getBytes(), Utilities.Charset.UTF_8)
   }));
 
   const payload = JSON.stringify({ documentos });
