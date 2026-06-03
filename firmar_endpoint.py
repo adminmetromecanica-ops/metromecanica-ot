@@ -46,15 +46,20 @@ def aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes):
 
 @firmar_bp.route('/firmar-pdf', methods=['POST'])
 def firmar_pdf():
-    """
-    Recibe un PDF como multipart/form-data (campo 'file'),
-    aplica membrete + firma, devuelve el PDF procesado.
-    """
     if 'file' not in request.files:
         return jsonify({"error": "No se envió archivo"}), 400
 
-    archivo = request.files['file']
+    archivo   = request.files['file']
     pdf_bytes = archivo.read()
+
+    # Log de diagnóstico
+    print(f"[firmar] Recibido: {archivo.filename}, {len(pdf_bytes)} bytes, header={pdf_bytes[:8]}", flush=True)
+
+    if len(pdf_bytes) < 100:
+        return jsonify({"error": f"PDF demasiado pequeño: {len(pdf_bytes)} bytes. Header: {pdf_bytes[:20]}"}), 400
+
+    if not pdf_bytes.startswith(b'%PDF'):
+        return jsonify({"error": f"No es un PDF válido. Header recibido: {pdf_bytes[:20]}"}), 400
 
     base_dir      = os.path.dirname(os.path.abspath(__file__))
     ruta_membrete = os.path.join(base_dir, "assets", "MEMBRETE_FINAL_MMC_2025.pdf")
@@ -65,21 +70,29 @@ def firmar_pdf():
     if not os.path.exists(ruta_firma):
         return jsonify({"error": "Firma no encontrada"}), 500
 
+    # Verificar integridad de assets
     with open(ruta_membrete, "rb") as f:
         membrete_bytes = f.read()
     with open(ruta_firma, "rb") as f:
         firma_bytes = f.read()
+
+    print(f"[firmar] Membrete: {len(membrete_bytes)} bytes, Firma: {len(firma_bytes)} bytes", flush=True)
+
+    if not membrete_bytes.startswith(b'%PDF'):
+        return jsonify({"error": f"Membrete corrupto en servidor. Header: {membrete_bytes[:20]}"}), 500
+    if not firma_bytes.startswith(b'%PDF'):
+        return jsonify({"error": f"Firma corrupta en servidor. Header: {firma_bytes[:20]}"}), 500
 
     try:
         resultado = aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    nombre_out = archivo.filename or "firmado.pdf"
+    print(f"[firmar] PDF generado: {len(resultado)} bytes", flush=True)
 
     return send_file(
         io.BytesIO(resultado),
         mimetype='application/pdf',
         as_attachment=True,
-        download_name=nombre_out
+        download_name=archivo.filename or "firmado.pdf"
     )
