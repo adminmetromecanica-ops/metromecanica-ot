@@ -1,7 +1,5 @@
 import os
 import io
-import base64
-import tempfile
 from flask import Blueprint, request, jsonify, send_file
 from pypdf import PdfReader, PdfWriter
 from copy import deepcopy
@@ -28,20 +26,17 @@ def aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes):
 
     membrete_page = membrete_reader.pages[0]
     firma_page    = firma_reader.pages[0]
-
-    writer = PdfWriter()
+    writer        = PdfWriter()
 
     for i, page in enumerate(cert_reader.pages):
         nueva = deepcopy(page)
         nueva.merge_page(deepcopy(membrete_page), expand=False, over=False)
-
         if i == 0:
             firma = deepcopy(firma_page)
             firma.add_transformation([sx, 0, 0, sy, FIRMA_X, FIRMA_Y])
             firma.mediabox.lower_left  = (0, 0)
             firma.mediabox.upper_right = (PAGE_W, PAGE_H)
             nueva.merge_page(firma, over=True)
-
         writer.add_page(nueva)
 
     out = io.BytesIO()
@@ -49,48 +44,42 @@ def aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes):
     return out.getvalue()
 
 
-@firmar_bp.route('/firmar-lote', methods=['POST'])
-def firmar_lote():
-    data = request.get_json(force=True, silent=True)
-    if not data or "documentos" not in data:
-        return jsonify({"error": "Body inválido. Se esperan 'documentos'"}), 400
+@firmar_bp.route('/firmar-pdf', methods=['POST'])
+def firmar_pdf():
+    """
+    Recibe un PDF como multipart/form-data (campo 'file'),
+    aplica membrete + firma, devuelve el PDF procesado.
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "No se envió archivo"}), 400
+
+    archivo = request.files['file']
+    pdf_bytes = archivo.read()
 
     base_dir      = os.path.dirname(os.path.abspath(__file__))
     ruta_membrete = os.path.join(base_dir, "assets", "MEMBRETE_FINAL_MMC_2025.pdf")
     ruta_firma    = os.path.join(base_dir, "assets", "FIRMA_GABRIEL_2024-2025.pdf")
 
     if not os.path.exists(ruta_membrete):
-        return jsonify({"error": "Membrete no encontrado en servidor"}), 500
+        return jsonify({"error": "Membrete no encontrado"}), 500
     if not os.path.exists(ruta_firma):
-        return jsonify({"error": "Firma no encontrada en servidor"}), 500
+        return jsonify({"error": "Firma no encontrada"}), 500
 
     with open(ruta_membrete, "rb") as f:
         membrete_bytes = f.read()
     with open(ruta_firma, "rb") as f:
         firma_bytes = f.read()
 
-    procesados = []
-    errores    = []
+    try:
+        resultado = aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    for doc in data["documentos"]:
-        nombre = doc.get("nombre", "documento.pdf")
-        try:
-            # Limpiar base64 por si viene con caracteres extra
-            contenido_limpio = doc["contenido"].strip().replace("\n", "").replace("\r", "")
-            # Agregar padding si falta
-            padding = 4 - len(contenido_limpio) % 4
-            if padding != 4:
-                contenido_limpio += "=" * padding
-            pdf_bytes = base64.b64decode(contenido_limpio)
-            resultado = aplicar_membrete_y_firma(pdf_bytes, membrete_bytes, firma_bytes)
-            procesados.append({
-                "nombre":    nombre,
-                "contenido": base64.b64encode(resultado).decode("utf-8")
-            })
-        except Exception as e:
-            errores.append({"nombre": nombre, "error": str(e)})
+    nombre_out = archivo.filename or "firmado.pdf"
 
-    return jsonify({
-        "procesados": procesados,
-        "errores":    errores
-    })
+    return send_file(
+        io.BytesIO(resultado),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=nombre_out
+    )
