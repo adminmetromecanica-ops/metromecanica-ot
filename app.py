@@ -23,7 +23,7 @@ OUTPUT_DIR    = os.path.join(BASE_DIR, "ordenes_generadas")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 from certbot_endpoint import certbot_bp
 app.register_blueprint(certbot_bp)
