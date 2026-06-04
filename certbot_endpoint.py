@@ -164,7 +164,7 @@ def generar_certificado():
 
         cmd = [
             "libreoffice", "--headless",
-            "--convert-to", "pdf:calc_pdf_Export:EmbedStandardFonts=true",
+            "--convert-to", "pdf:calc_pdf_Export:EmbedStandardFonts=true,ExportOnlyPagePrintRange=true",
             "--outdir", tmpdir,
             ruta_xlsx
         ]
