@@ -61,7 +61,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
     wb = load_workbook(ruta_copia, data_only=False, keep_vba=True)
     ws = wb[cert_name]
 
-    # Inyectar valores estáticos
     for coord, val in valores_cert.items():
         try:
             cell = ws[coord]
@@ -75,7 +74,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
         except Exception:
             pass
 
-    # Limpiar fórmulas residuales
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -86,7 +84,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # Ocultar todas las hojas menos CERTIFICADO
     for nombre in wb.sheetnames:
         if nombre != cert_name:
             try:
@@ -94,7 +91,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # Marcar CERTIFICADO como hoja activa
     for i, s in enumerate(wb.worksheets):
         if s.title == cert_name:
             wb.active = i
@@ -102,7 +98,7 @@ def preparar_para_pdf(ruta_excel, tmpdir):
 
     wb.save(ruta_copia)
     wb.close()
-    return ruta_copia
+    return ruta_copia, cert_name
 
 
 def construir_nombre(ruta_excel, nombre_archivo):
@@ -153,7 +149,7 @@ def generar_certificado():
         archivo.save(ruta_excel)
 
         try:
-            ruta_xlsx = preparar_para_pdf(ruta_excel, tmpdir)
+            ruta_copia, cert_name = preparar_para_pdf(ruta_excel, tmpdir)
         except Exception as e:
             return jsonify({"error": f"Error preparando archivo: {str(e)}"}), 500
 
@@ -164,30 +160,27 @@ def generar_certificado():
 
         cmd = [
             "libreoffice", "--headless",
-            "--convert-to", "pdf:calc_pdf_Export:EmbedStandardFonts=true,ExportOnlyPagePrintRange=true",
+            "--infilter=Calc MS Excel 2007 XML",
+            "--convert-to", f"pdf:calc_pdf_Export:EmbedStandardFonts=true,SheetRanges={cert_name}",
             "--outdir", tmpdir,
-            ruta_xlsx
+            ruta_copia
         ]
+
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
 
-        print(f"LibreOffice stdout: {result.stdout}")
-        print(f"LibreOffice stderr: {result.stderr}")
-        print(f"Return code: {result.returncode}")
-        print(f"Archivos en tmpdir: {os.listdir(tmpdir)}")
+        print(f"stdout: {result.stdout}")
+        print(f"stderr: {result.stderr}")
+        print(f"returncode: {result.returncode}")
+        print(f"archivos: {os.listdir(tmpdir)}")
 
         if result.returncode != 0:
             return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
 
         pdfs = [f for f in os.listdir(tmpdir) if f.endswith('.pdf')]
-        print(f"PDFs encontrados: {pdfs}")
+        print(f"PDFs: {pdfs}")
 
         if not pdfs:
-            return jsonify({
-                "error": "PDF no generado",
-                "detalle": result.stderr,
-                "stdout": result.stdout,
-                "archivos": os.listdir(tmpdir)
-            }), 500
+            return jsonify({"error": "PDF no generado", "archivos": os.listdir(tmpdir)}), 500
 
         pdf_generado = os.path.join(tmpdir, pdfs[0])
         pdf_final    = os.path.join(tmpdir, construir_nombre(ruta_excel, nombre))
