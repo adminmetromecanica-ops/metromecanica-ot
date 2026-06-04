@@ -61,6 +61,7 @@ def preparar_para_pdf(ruta_excel, tmpdir):
     wb = load_workbook(ruta_copia, data_only=False, keep_vba=True)
     ws = wb[cert_name]
 
+    # Inyectar valores estáticos
     for coord, val in valores_cert.items():
         try:
             cell = ws[coord]
@@ -74,6 +75,7 @@ def preparar_para_pdf(ruta_excel, tmpdir):
         except Exception:
             pass
 
+    # Limpiar fórmulas residuales
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -84,17 +86,20 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
+    # Primero marcar CERTIFICADO como visible y activa
+    for i, s in enumerate(wb.worksheets):
+        if s.title == cert_name:
+            wb.active = i
+            s.sheet_state = "visible"
+            break
+
+    # Luego ocultar todas las demás
     for nombre in wb.sheetnames:
         if nombre != cert_name:
             try:
                 wb[nombre].sheet_state = "veryHidden"
             except Exception:
                 pass
-
-    for i, s in enumerate(wb.worksheets):
-        if s.title == cert_name:
-            wb.active = i
-            break
 
     wb.save(ruta_copia)
     wb.close()
