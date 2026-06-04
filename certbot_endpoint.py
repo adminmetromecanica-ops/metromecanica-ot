@@ -56,11 +56,9 @@ def leer_certificado(ruta_excel):
 def preparar_para_pdf(ruta_excel, tmpdir):
     valores_cert, cert_name = leer_certificado(ruta_excel)
 
-    # Paso 1: copiar original preservando charts/drawings
     ruta_copia = os.path.join(tmpdir, "trabajo.xlsm")
     shutil.copy2(ruta_excel, ruta_copia)
 
-    # Paso 2: inyectar valores estáticos con openpyxl
     wb = load_workbook(ruta_copia, data_only=False, keep_vba=True)
     ws = wb[cert_name]
 
@@ -88,24 +86,16 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # Obtener índice de hoja CERTIFICADO en workbook.xml
-    cert_idx = wb.sheetnames.index(cert_name)
-
     wb.save(ruta_copia)
     wb.close()
 
-    # Paso 3: manipular el ZIP para dejar SOLO la hoja CERTIFICADO
-    # Mapear sheet names → sheet xml files
     ruta_out = os.path.join(tmpdir, "certificado_final.xlsx")
 
     with zipfile.ZipFile(ruta_copia, 'r') as zin:
         all_files = zin.namelist()
-
-        # Leer workbook.xml para obtener relaciones de hojas
-        wb_xml = zin.read('xl/workbook.xml').decode('utf-8')
+        wb_xml  = zin.read('xl/workbook.xml').decode('utf-8')
         wb_rels = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8')
 
-        # Identificar sheet files de hojas que NO son CERTIFICADO
         import xml.etree.ElementTree as ET
         ns = {'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
               'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
@@ -113,13 +103,11 @@ def preparar_para_pdf(ruta_excel, tmpdir):
         tree_wb  = ET.fromstring(wb_xml)
         tree_rel = ET.fromstring(wb_rels)
 
-        # Construir mapa rId → target
         rid_to_target = {}
         for rel in tree_rel.findall('r:Relationship', ns):
             rid_to_target[rel.get('Id')] = rel.get('Target')
 
-        # Identificar rIds de hojas que NO son CERTIFICADO
-        sheets_to_remove = set()
+        sheets_to_remove    = set()
         sheet_rids_to_remove = set()
         for sheet in tree_wb.findall('.//x:sheet', ns):
             name = sheet.get('name')
@@ -129,26 +117,22 @@ def preparar_para_pdf(ruta_excel, tmpdir):
                 sheets_to_remove.add(target.replace('../', 'xl/').replace('xl/xl/', 'xl/'))
                 sheet_rids_to_remove.add(rid)
 
-        # Archivos a excluir del ZIP final
         exclude = set()
         for f in all_files:
             for s in sheets_to_remove:
                 sheet_file = s if s.startswith('xl/') else f'xl/{s}'
-                if f == sheet_file or f == sheet_file.replace('xl/worksheets/', 'xl/worksheets/'):
+                if f == sheet_file:
                     exclude.add(f)
-                # También excluir _rels del sheet
                 sheet_base = os.path.basename(sheet_file)
                 if f == f'xl/worksheets/_rels/{sheet_base}.rels':
                     exclude.add(f)
 
-        # Escribir nuevo ZIP solo con hoja CERTIFICADO
         with zipfile.ZipFile(ruta_out, 'w', zipfile.ZIP_DEFLATED) as zout:
             for item in all_files:
                 if item in exclude:
                     continue
                 data = zin.read(item)
 
-                # En workbook.xml: eliminar referencias a hojas removidas
                 if item == 'xl/workbook.xml':
                     root = ET.fromstring(data.decode('utf-8'))
                     sheets_elem = root.find('.//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheets')
@@ -159,7 +143,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
                                 sheets_elem.remove(sheet)
                     data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
 
-                # En workbook.xml.rels: eliminar relaciones de hojas removidas
                 if item == 'xl/_rels/workbook.xml.rels':
                     root = ET.fromstring(data.decode('utf-8'))
                     for rel in list(root):
@@ -236,14 +219,29 @@ def generar_certificado():
             ruta_xlsx
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
+
+        print(f"LibreOffice stdout: {result.stdout}")
+        print(f"LibreOffice stderr: {result.stderr}")
+        print(f"Return code: {result.returncode}")
+        print(f"Archivos en tmpdir: {os.listdir(tmpdir)}")
+
         if result.returncode != 0:
             return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
 
-        pdf_generado = os.path.join(tmpdir, "certificado_final.pdf")
-        if not os.path.exists(pdf_generado):
-            return jsonify({"error": "PDF no generado"}), 500
+        # Buscar cualquier PDF generado
+        pdfs = [f for f in os.listdir(tmpdir) if f.endswith('.pdf')]
+        print(f"PDFs encontrados: {pdfs}")
 
-        pdf_final = os.path.join(tmpdir, construir_nombre(ruta_excel, nombre))
+        if not pdfs:
+            return jsonify({
+                "error": "PDF no generado",
+                "detalle": result.stderr,
+                "stdout": result.stdout,
+                "archivos": os.listdir(tmpdir)
+            }), 500
+
+        pdf_generado = os.path.join(tmpdir, pdfs[0])
+        pdf_final    = os.path.join(tmpdir, construir_nombre(ruta_excel, nombre))
 
         try:
             from pypdf import PdfReader, PdfWriter
