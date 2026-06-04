@@ -3,6 +3,8 @@ import re
 import subprocess
 import tempfile
 import datetime
+import shutil
+import zipfile
 from flask import Blueprint, request, jsonify, send_file
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
@@ -11,46 +13,26 @@ certbot_bp = Blueprint('certbot', __name__)
 
 
 def fmt_val(val, number_format=None):
-    """
-    Convierte un valor numérico al formato peruano (coma decimal)
-    respetando el number_format de la celda.
-    No toca strings, fechas, ni booleanos.
-    """
     if val is None or isinstance(val, bool) or isinstance(val, str):
         return val
-
     if isinstance(val, datetime.datetime):
         return val.strftime("%Y-%m-%d")
-
     if isinstance(val, (int, float)):
         if not number_format or number_format in ("General", "@"):
-            # Sin formato: limpiar ruido flotante pero no forzar decimales
             if isinstance(val, float) and val == int(val):
                 return int(val)
             return val
-
-        # Contar decimales del formato Excel (ej: "0.000" → 3)
         m = re.search(r'\.([0#]+)', number_format)
         decimales = len(m.group(1)) if m else 0
-
         redondeado = round(float(val), decimales)
-
         if decimales == 0:
             return int(redondeado)
-
         s = f"{redondeado:.{decimales}f}"
         return s.replace(".", ",")
-
     return val
 
 
 def leer_certificado(ruta_excel):
-    """
-    Lee la hoja CERTIFICADO con data_only=True (valores calculados)
-    Y con data_only=False (para leer number_format).
-    Retorna dict: { coord: valor_formateado }
-    """
-    # Paso 1: leer valores calculados
     wb_vals = load_workbook(ruta_excel, read_only=False, data_only=True)
     cert_name = next(
         (s for s in wb_vals.sheetnames if s.upper() == "CERTIFICADO"),
@@ -65,26 +47,25 @@ def leer_certificado(ruta_excel):
             if cell.value is not None:
                 valores[cell.coordinate] = (cell.value, cell.number_format)
     wb_vals.close()
-
-    # Paso 2: formatear cada valor
     resultado = {}
     for coord, (val, fmt) in valores.items():
         resultado[coord] = fmt_val(val, fmt)
-
     return resultado, cert_name
 
 
 def preparar_para_pdf(ruta_excel, tmpdir):
     """
-    1. Lee todos los valores calculados de CERTIFICADO (con su formato)
-    2. Abre el workbook en modo edición
-    3. Inyecta los valores estáticos (sin fórmulas) en CERTIFICADO
-    4. Elimina todas las demás hojas
-    5. Guarda
+    Preserva gráficos: copia el archivo original, inyecta valores
+    estáticos solo en la hoja CERTIFICADO, oculta las demás hojas
+    (no las elimina) para que LibreOffice renderice el gráfico.
     """
     valores_cert, cert_name = leer_certificado(ruta_excel)
 
-    wb = load_workbook(ruta_excel, data_only=False)
+    # Copiar el original para preservar drawings/charts
+    ruta_copia = os.path.join(tmpdir, "certificado_trabajo.xlsm")
+    shutil.copy2(ruta_excel, ruta_copia)
+
+    wb = load_workbook(ruta_copia, data_only=False, keep_vba=True)
     ws = wb[cert_name]
     ws.sheet_state = "visible"
 
@@ -93,7 +74,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
         try:
             cell = ws[coord]
             if isinstance(cell, MergedCell):
-                # Escribir en la celda master del rango fusionado
                 for rng in ws.merged_cells.ranges:
                     if coord in rng:
                         master = ws.cell(row=rng.min_row, column=rng.min_col)
@@ -104,7 +84,7 @@ def preparar_para_pdf(ruta_excel, tmpdir):
         except Exception:
             pass
 
-    # Limpiar cualquier fórmula residual
+    # Limpiar fórmulas residuales
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -115,22 +95,21 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # Eliminar todas las demás hojas
-    for nombre in [s for s in wb.sheetnames if s != cert_name]:
-        try:
-            wb[nombre].sheet_state = "visible"
-            del wb[nombre]
-        except Exception:
-            pass
+    # Ocultar otras hojas (no eliminar — preserva los drawings)
+    for nombre in wb.sheetnames:
+        if nombre != cert_name:
+            try:
+                wb[nombre].sheet_state = "hidden"
+            except Exception:
+                pass
 
-    ruta_out = os.path.join(tmpdir, "certificado_final.xlsx")
+    ruta_out = os.path.join(tmpdir, "certificado_final.xlsm")
     wb.save(ruta_out)
     wb.close()
     return ruta_out
 
 
 def construir_nombre(ruta_excel, nombre_archivo):
-    """Construye el nombre del PDF desde pestaña CALIBRACION o nombre del archivo."""
     n_cert = magnitud = equipo = cliente = ot = ""
     try:
         wb = load_workbook(ruta_excel, read_only=True, data_only=True)
