@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import datetime
 import shutil
+import zipfile
 from flask import Blueprint, request, jsonify, send_file
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
@@ -55,15 +56,14 @@ def leer_certificado(ruta_excel):
 def preparar_para_pdf(ruta_excel, tmpdir):
     valores_cert, cert_name = leer_certificado(ruta_excel)
 
-    # Copiar original para preservar drawings/charts
-    ruta_copia = os.path.join(tmpdir, "certificado_trabajo.xlsm")
+    # Paso 1: copiar original preservando charts/drawings
+    ruta_copia = os.path.join(tmpdir, "trabajo.xlsm")
     shutil.copy2(ruta_excel, ruta_copia)
 
+    # Paso 2: inyectar valores estáticos con openpyxl
     wb = load_workbook(ruta_copia, data_only=False, keep_vba=True)
     ws = wb[cert_name]
-    ws.sheet_state = "visible"
 
-    # Inyectar valores estáticos
     for coord, val in valores_cert.items():
         try:
             cell = ws[coord]
@@ -78,7 +78,6 @@ def preparar_para_pdf(ruta_excel, tmpdir):
         except Exception:
             pass
 
-    # Limpiar fórmulas residuales
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -89,23 +88,87 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # veryHidden en todas las demás hojas
-    for nombre in wb.sheetnames:
-        if nombre != cert_name:
-            try:
-                wb[nombre].sheet_state = "veryHidden"
-            except Exception:
-                pass
+    # Obtener índice de hoja CERTIFICADO en workbook.xml
+    cert_idx = wb.sheetnames.index(cert_name)
 
-    # Marcar CERTIFICADO como hoja activa
-    for i, s in enumerate(wb.worksheets):
-        if s.title == cert_name:
-            wb.active = i
-            break
-
-    ruta_out = os.path.join(tmpdir, "certificado_final.xlsm")
-    wb.save(ruta_out)
+    wb.save(ruta_copia)
     wb.close()
+
+    # Paso 3: manipular el ZIP para dejar SOLO la hoja CERTIFICADO
+    # Mapear sheet names → sheet xml files
+    ruta_out = os.path.join(tmpdir, "certificado_final.xlsx")
+
+    with zipfile.ZipFile(ruta_copia, 'r') as zin:
+        all_files = zin.namelist()
+
+        # Leer workbook.xml para obtener relaciones de hojas
+        wb_xml = zin.read('xl/workbook.xml').decode('utf-8')
+        wb_rels = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+
+        # Identificar sheet files de hojas que NO son CERTIFICADO
+        import xml.etree.ElementTree as ET
+        ns = {'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+              'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+        tree_wb  = ET.fromstring(wb_xml)
+        tree_rel = ET.fromstring(wb_rels)
+
+        # Construir mapa rId → target
+        rid_to_target = {}
+        for rel in tree_rel.findall('r:Relationship', ns):
+            rid_to_target[rel.get('Id')] = rel.get('Target')
+
+        # Identificar rIds de hojas que NO son CERTIFICADO
+        sheets_to_remove = set()
+        sheet_rids_to_remove = set()
+        for sheet in tree_wb.findall('.//x:sheet', ns):
+            name = sheet.get('name')
+            rid  = sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+            if name.upper() != cert_name.upper():
+                target = rid_to_target.get(rid, '')
+                sheets_to_remove.add(target.replace('../', 'xl/').replace('xl/xl/', 'xl/'))
+                sheet_rids_to_remove.add(rid)
+
+        # Archivos a excluir del ZIP final
+        exclude = set()
+        for f in all_files:
+            for s in sheets_to_remove:
+                sheet_file = s if s.startswith('xl/') else f'xl/{s}'
+                if f == sheet_file or f == sheet_file.replace('xl/worksheets/', 'xl/worksheets/'):
+                    exclude.add(f)
+                # También excluir _rels del sheet
+                sheet_base = os.path.basename(sheet_file)
+                if f == f'xl/worksheets/_rels/{sheet_base}.rels':
+                    exclude.add(f)
+
+        # Escribir nuevo ZIP solo con hoja CERTIFICADO
+        with zipfile.ZipFile(ruta_out, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in all_files:
+                if item in exclude:
+                    continue
+                data = zin.read(item)
+
+                # En workbook.xml: eliminar referencias a hojas removidas
+                if item == 'xl/workbook.xml':
+                    root = ET.fromstring(data.decode('utf-8'))
+                    sheets_elem = root.find('.//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheets')
+                    if sheets_elem is not None:
+                        for sheet in list(sheets_elem):
+                            rid = sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                            if rid in sheet_rids_to_remove:
+                                sheets_elem.remove(sheet)
+                    data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+                # En workbook.xml.rels: eliminar relaciones de hojas removidas
+                if item == 'xl/_rels/workbook.xml.rels':
+                    root = ET.fromstring(data.decode('utf-8'))
+                    for rel in list(root):
+                        if rel.get('Id') in sheet_rids_to_remove:
+                            root.remove(rel)
+                    data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+                zout.writestr(item, data)
+
     return ruta_out
 
 
@@ -168,7 +231,7 @@ def generar_certificado():
 
         cmd = [
             "libreoffice", "--headless",
-            "--convert-to", "pdf:calc_pdf_Export:EmbedStandardFonts=true,Selection=1",
+            "--convert-to", "pdf",
             "--outdir", tmpdir,
             ruta_xlsx
         ]
