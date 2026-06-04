@@ -4,7 +4,6 @@ import subprocess
 import tempfile
 import datetime
 import shutil
-import zipfile
 from flask import Blueprint, request, jsonify, send_file
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
@@ -54,14 +53,9 @@ def leer_certificado(ruta_excel):
 
 
 def preparar_para_pdf(ruta_excel, tmpdir):
-    """
-    Preserva gráficos: copia el archivo original, inyecta valores
-    estáticos solo en la hoja CERTIFICADO, oculta las demás hojas
-    (no las elimina) para que LibreOffice renderice el gráfico.
-    """
     valores_cert, cert_name = leer_certificado(ruta_excel)
 
-    # Copiar el original para preservar drawings/charts
+    # Copiar original para preservar drawings/charts
     ruta_copia = os.path.join(tmpdir, "certificado_trabajo.xlsm")
     shutil.copy2(ruta_excel, ruta_copia)
 
@@ -76,7 +70,7 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             if isinstance(cell, MergedCell):
                 for rng in ws.merged_cells.ranges:
                     if coord in rng:
-                        master = ws.cell(row=rng.min_row, column=rng.min_col)
+                        master = wb[cert_name].cell(row=rng.min_row, column=rng.min_col)
                         master.value = val
                         break
             else:
@@ -95,13 +89,19 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
-    # Ocultar otras hojas (no eliminar — preserva los drawings)
+    # veryHidden en todas las demás hojas
     for nombre in wb.sheetnames:
         if nombre != cert_name:
             try:
-                wb[nombre].sheet_state = "hidden"
+                wb[nombre].sheet_state = "veryHidden"
             except Exception:
                 pass
+
+    # Marcar CERTIFICADO como hoja activa
+    for i, s in enumerate(wb.worksheets):
+        if s.title == cert_name:
+            wb.active = i
+            break
 
     ruta_out = os.path.join(tmpdir, "certificado_final.xlsm")
     wb.save(ruta_out)
@@ -168,7 +168,7 @@ def generar_certificado():
 
         cmd = [
             "libreoffice", "--headless",
-            "--convert-to", "pdf",
+            "--convert-to", "pdf:calc_pdf_Export:EmbedStandardFonts=true,Selection=1",
             "--outdir", tmpdir,
             ruta_xlsx
         ]
