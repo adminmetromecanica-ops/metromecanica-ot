@@ -4,7 +4,6 @@ import subprocess
 import tempfile
 import datetime
 import shutil
-import zipfile
 from flask import Blueprint, request, jsonify, send_file
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
@@ -56,26 +55,27 @@ def leer_certificado(ruta_excel):
 def preparar_para_pdf(ruta_excel, tmpdir):
     valores_cert, cert_name = leer_certificado(ruta_excel)
 
-    ruta_copia = os.path.join(tmpdir, "trabajo.xlsm")
+    ruta_copia = os.path.join(tmpdir, "certificado_final.xlsx")
     shutil.copy2(ruta_excel, ruta_copia)
 
     wb = load_workbook(ruta_copia, data_only=False, keep_vba=True)
     ws = wb[cert_name]
 
+    # Inyectar valores estáticos
     for coord, val in valores_cert.items():
         try:
             cell = ws[coord]
             if isinstance(cell, MergedCell):
                 for rng in ws.merged_cells.ranges:
                     if coord in rng:
-                        master = wb[cert_name].cell(row=rng.min_row, column=rng.min_col)
-                        master.value = val
+                        wb[cert_name].cell(row=rng.min_row, column=rng.min_col).value = val
                         break
             else:
                 cell.value = val
         except Exception:
             pass
 
+    # Limpiar fórmulas residuales
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell, MergedCell):
@@ -86,73 +86,23 @@ def preparar_para_pdf(ruta_excel, tmpdir):
             except Exception:
                 pass
 
+    # Ocultar todas las hojas menos CERTIFICADO
+    for nombre in wb.sheetnames:
+        if nombre != cert_name:
+            try:
+                wb[nombre].sheet_state = "veryHidden"
+            except Exception:
+                pass
+
+    # Marcar CERTIFICADO como hoja activa
+    for i, s in enumerate(wb.worksheets):
+        if s.title == cert_name:
+            wb.active = i
+            break
+
     wb.save(ruta_copia)
     wb.close()
-
-    ruta_out = os.path.join(tmpdir, "certificado_final.xlsx")
-
-    with zipfile.ZipFile(ruta_copia, 'r') as zin:
-        all_files = zin.namelist()
-        wb_xml  = zin.read('xl/workbook.xml').decode('utf-8')
-        wb_rels = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8')
-
-        import xml.etree.ElementTree as ET
-        ns = {'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-              'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-
-        tree_wb  = ET.fromstring(wb_xml)
-        tree_rel = ET.fromstring(wb_rels)
-
-        rid_to_target = {}
-        for rel in tree_rel.findall('r:Relationship', ns):
-            rid_to_target[rel.get('Id')] = rel.get('Target')
-
-        sheets_to_remove    = set()
-        sheet_rids_to_remove = set()
-        for sheet in tree_wb.findall('.//x:sheet', ns):
-            name = sheet.get('name')
-            rid  = sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
-            if name.upper() != cert_name.upper():
-                target = rid_to_target.get(rid, '')
-                sheets_to_remove.add(target.replace('../', 'xl/').replace('xl/xl/', 'xl/'))
-                sheet_rids_to_remove.add(rid)
-
-        exclude = set()
-        for f in all_files:
-            for s in sheets_to_remove:
-                sheet_file = s if s.startswith('xl/') else f'xl/{s}'
-                if f == sheet_file:
-                    exclude.add(f)
-                sheet_base = os.path.basename(sheet_file)
-                if f == f'xl/worksheets/_rels/{sheet_base}.rels':
-                    exclude.add(f)
-
-        with zipfile.ZipFile(ruta_out, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for item in all_files:
-                if item in exclude:
-                    continue
-                data = zin.read(item)
-
-                if item == 'xl/workbook.xml':
-                    root = ET.fromstring(data.decode('utf-8'))
-                    sheets_elem = root.find('.//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheets')
-                    if sheets_elem is not None:
-                        for sheet in list(sheets_elem):
-                            rid = sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
-                            if rid in sheet_rids_to_remove:
-                                sheets_elem.remove(sheet)
-                    data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
-
-                if item == 'xl/_rels/workbook.xml.rels':
-                    root = ET.fromstring(data.decode('utf-8'))
-                    for rel in list(root):
-                        if rel.get('Id') in sheet_rids_to_remove:
-                            root.remove(rel)
-                    data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
-
-                zout.writestr(item, data)
-
-    return ruta_out
+    return ruta_copia
 
 
 def construir_nombre(ruta_excel, nombre_archivo):
@@ -214,7 +164,7 @@ def generar_certificado():
 
         cmd = [
             "libreoffice", "--headless",
-            "--convert-to", "pdf",
+            "--convert-to", "pdf:calc_pdf_Export:EmbedStandardFonts=true",
             "--outdir", tmpdir,
             ruta_xlsx
         ]
@@ -228,7 +178,6 @@ def generar_certificado():
         if result.returncode != 0:
             return jsonify({"error": "Error LibreOffice", "detalle": result.stderr}), 500
 
-        # Buscar cualquier PDF generado
         pdfs = [f for f in os.listdir(tmpdir) if f.endswith('.pdf')]
         print(f"PDFs encontrados: {pdfs}")
 
